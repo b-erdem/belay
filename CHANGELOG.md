@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
+  versioned protocol: tables, state machine, annotated SQL for every
+  operation, advisory-lock discipline, the two soak-learned race rules, and
+  a conformance path (the soak driver verifies any foreign worker SDK by
+  reading the database). Groundwork for Python/TypeScript SDKs as thin
+  contract implementations rather than rewrites.
+- **`Capstan.Codec` — cross-language value envelope.** Step values and job
+  results now decode as Erlang term format (leading byte 131, written by
+  Elixir) *or* UTF-8 JSON (written by any other SDK); tested with
+  foreign-written JSON rows replaying through the engine.
+
 ## 1.0.0-rc.4 — 2026-07-20
 
 The "better at every dimension" release: the embedded dashboard, transactional

@@ -35,6 +35,7 @@ defmodule Capstan.MixProject do
         "guides/testing.md",
         "guides/comparison.md",
         "DESIGN.md",
+        "SCHEMA.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [Guides: ~r/guides\/.*/]
@@ -61,7 +62,7 @@ defmodule Capstan.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib guides mix.exs README.md DESIGN.md CHANGELOG.md LICENSE)
+      files: ~w(lib guides mix.exs README.md DESIGN.md SCHEMA.md CHANGELOG.md LICENSE)
     ]
   end
 end

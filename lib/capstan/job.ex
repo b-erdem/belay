@@ -62,9 +62,8 @@ defmodule Capstan.Job do
 
   def terminal?(%__MODULE__{state: state}), do: state in @terminal
 
-  @doc "Decode the term-encoded result of a succeeded job."
-  def result(%__MODULE__{result: nil}), do: nil
-  def result(%__MODULE__{result: bin}) when is_binary(bin), do: :erlang.binary_to_term(bin)
+  @doc "Decode a succeeded job's result (ETF or JSON — see `Capstan.Codec`)."
+  def result(%__MODULE__{result: bin}), do: Capstan.Codec.decode(bin)
 
   @doc false
   def worker_module!(%__MODULE__{kind: kind}) do

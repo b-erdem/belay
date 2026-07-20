@@ -120,7 +120,10 @@ Full walkthrough: [guides/getting-started.md](guides/getting-started.md).
 Deep dives: [durable steps](guides/durable-steps.md) ·
 [building agents](guides/agents.md) · [operations](guides/operations.md) ·
 [testing](guides/testing.md) · [honest comparison](guides/comparison.md) ·
-[architecture rationale](DESIGN.md).
+[architecture rationale](DESIGN.md) · [the wire contract](SCHEMA.md) —
+the schema *is* the protocol, so Python/TypeScript SDKs are contract
+implementations, not rewrites (step values already speak a dual ETF/JSON
+envelope).
 
 ## Testing your app
 

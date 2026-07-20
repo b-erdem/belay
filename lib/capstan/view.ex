@@ -45,7 +45,7 @@ defmodule Capstan.View do
       "name" => step.name,
       "usd_micros" => step.usd_micros,
       "tokens" => step.tokens,
-      "value" => step.value && inspect(:erlang.binary_to_term(step.value), limit: 25)
+      "value" => step.value && inspect(Capstan.Codec.decode(step.value), limit: 25)
     }
   end
 

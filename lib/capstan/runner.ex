@@ -173,7 +173,7 @@ defmodule Capstan.Runner do
 
     case storage.get_step(ref, job.id, name) do
       {:ok, bin} ->
-        :erlang.binary_to_term(bin)
+        Capstan.Codec.decode(bin)
 
       :none when ctx.replay? ->
         throw({:capstan_replay, {:missing_step, name}})
@@ -182,7 +182,7 @@ defmodule Capstan.Runner do
         check_cancel!(config, job)
 
         result = fun.()
-        bin = :erlang.term_to_binary(result)
+        bin = Capstan.Codec.encode(result)
 
         if byte_size(bin) > @max_step_bytes do
           raise ArgumentError,
