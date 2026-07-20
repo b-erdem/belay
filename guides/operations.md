@@ -51,13 +51,20 @@ Postgres 16, M1):
 | cross-process, polling only | 49.4ms | 179ms | 202ms | 349ms |
 | cross-process + `pg_notify` | 11.0ms | 12.8ms | 24.5ms | 371ms |
 
-Honest caveats: Postgres serializes NOTIFY-issuing transactions on a global
-queue at commit, so at very high sustained insert rates the accelerator
-itself becomes a contention point — Capstan already coalesces to one poke
-per queue per insert call, and if you ever see NOTIFY contention you can
-drop back to `[:local]` and keep the adaptive-polling latencies above.
-`await_result` wakes on result notifications and otherwise re-checks on a
-5ms→200ms backoff.
+Honest caveats, with receipts (digest in `docs/research/`): Postgres
+serializes NOTIFY-issuing commits on a global lock (the Recall.ai outage
+class; ~190k vs ~350k TPS with/without it in pgsql-hackers benchmarks —
+present through PG 18, and PG 19's fix covers only the listener-wake side).
+Capstan stays far from that zone by coalescing to one `pg_notify` per queue
+per insert batch/completion, and the accelerator is droppable at any time —
+`[:local]` keeps the adaptive-polling latencies above. The pooler rule:
+`pg_notify` through PgBouncer is fine; only the **listen** connection needs
+a direct line (`listen_url:`). Notifications are at-most-once by design,
+which is exactly why the polling floor is non-negotiable. `await_result`
+wakes on result notifications and otherwise re-checks on a 5ms→200ms
+backoff. One structural advantage worth naming: workers are BEAM processes
+in your running app — there is no sandbox cold-start tier between dispatch
+and execution at all.
 
 ## Sizing the loop
 
