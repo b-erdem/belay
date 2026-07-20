@@ -284,52 +284,11 @@ defmodule Capstan.MCP do
     end
   end
 
-  defp job_summary(%Job{} = job) do
-    %{
-      "id" => job.id,
-      "worker" => job.kind,
-      "queue" => job.queue,
-      "state" => job.state,
-      "attempt" => job.attempt,
-      "workflow" => job.workflow_id && %{"id" => job.workflow_id, "name" => job.wf_name},
-      "inserted_at" => iso(job.inserted_at),
-      "finished_at" => iso(job.finished_at)
-    }
-  end
+  defdelegate job_summary(job), to: Capstan.View
+  defdelegate job_detail(job), to: Capstan.View
+  defdelegate step_summary(step), to: Capstan.View
+  defdelegate event_summary(event), to: Capstan.View
 
-  defp job_detail(%Job{} = job) do
-    job
-    |> job_summary()
-    |> Map.merge(%{
-      "input" => job.input,
-      "meta" => job.meta,
-      "errors" => job.errors,
-      "priority" => job.priority,
-      "max_attempts" => job.max_attempts,
-      "ready_at" => iso(job.ready_at),
-      "await" => job.await_name && %{"scope" => job.await_scope, "name" => job.await_name},
-      "spent" => %{"usd_micros" => job.spent_usd_micros, "tokens" => job.spent_tokens},
-      "budget" => %{"usd_micros" => job.budget_usd_micros, "tokens" => job.budget_tokens},
-      "result" => job.result && inspect(Job.result(job), limit: 50, printable_limit: 2_000)
-    })
-  end
-
-  defp step_summary(step) do
-    %{
-      "seq" => step.seq,
-      "name" => step.name,
-      "usd_micros" => step.usd_micros,
-      "tokens" => step.tokens,
-      "value" => step.value && inspect(:erlang.binary_to_term(step.value), limit: 25)
-    }
-  end
-
-  defp event_summary(event) do
-    %{"seq" => event.seq, "payload" => event.payload, "at" => iso(event.inserted_at)}
-  end
-
-  defp iso(nil), do: nil
-  defp iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
 
   defp result(id, payload), do: %{"jsonrpc" => "2.0", "id" => id, "result" => payload}
 

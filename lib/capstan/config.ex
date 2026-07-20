@@ -16,7 +16,9 @@ defmodule Capstan.Config do
             cron_interval: 20_000,
             shutdown_grace: 15_000,
             retention: %{},
-            signal_ttl: 604_800
+            signal_ttl: 604_800,
+            encryption: nil,
+            dynamic_sync: 5_000
 
   @type t :: %__MODULE__{}
 
@@ -38,9 +40,28 @@ defmodule Capstan.Config do
       cron_interval: Keyword.get(opts, :cron_interval, 20_000),
       shutdown_grace: Keyword.get(opts, :shutdown_grace, 15_000),
       retention: normalize_retention(Keyword.get(opts, :retention, [])),
-      signal_ttl: Keyword.get(opts, :signal_ttl, 604_800)
+      signal_ttl: Keyword.get(opts, :signal_ttl, 604_800),
+      encryption: normalize_encryption(Keyword.get(opts, :encryption)),
+      dynamic_sync: Keyword.get(opts, :dynamic_sync, 5_000)
     }
   end
+
+  @doc "Resolve the configured 32-byte encryption key, or nil."
+  def encryption_key(%__MODULE__{encryption: nil}), do: nil
+
+  def encryption_key(%__MODULE__{encryption: {module, fun, args}}) do
+    case apply(module, fun, args) do
+      key when is_binary(key) and byte_size(key) == 32 ->
+        key
+
+      other ->
+        raise ArgumentError,
+              "encryption key must be a 32-byte binary, got: #{byte_size(to_string(other))} bytes"
+    end
+  end
+
+  defp normalize_encryption(nil), do: nil
+  defp normalize_encryption(key: {module, fun, args}), do: {module, fun, args}
 
   @default_retention %{"succeeded" => 86_400, "failed" => 604_800, "cancelled" => 604_800}
 
@@ -65,6 +86,13 @@ defmodule Capstan.Config do
   end
 
   def queue_spec(%__MODULE__{queues: queues}, queue), do: Map.fetch!(queues, to_string(queue))
+
+  @doc "Validate and normalize queue options into a producer spec."
+  def normalize_queue_opts(queue, opts) when is_list(opts) do
+    {limit, opts} = Keyword.pop(opts, :limit, 10)
+
+    queue_defaults(to_string(queue), limit, opts)
+  end
 
   defp normalize_storage({adapter, opts}), do: {storage_module(adapter), opts}
   defp normalize_storage(adapter) when is_atom(adapter), do: {storage_module(adapter), []}

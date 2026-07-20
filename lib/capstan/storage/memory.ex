@@ -26,7 +26,9 @@ defmodule Capstan.Storage.Memory do
             event_seqs: %{},
             signals: %{},
             rate: %{},
-            cron_slots: MapSet.new()
+            cron_slots: MapSet.new(),
+            dyn_queues: %{},
+            dyn_crons: %{}
 
   # -- Setup --------------------------------------------------------------------
 
@@ -118,6 +120,27 @@ defmodule Capstan.Storage.Memory do
 
   @impl Capstan.Storage
   def resettle_parents(ref, now), do: call(ref, {:resettle_parents, now})
+
+  @impl Capstan.Storage
+  def put_dynamic_queue(ref, name, opts, now), do: call(ref, {:put_dyn_queue, name, opts, now})
+
+  @impl Capstan.Storage
+  def delete_dynamic_queue(ref, name), do: call(ref, {:delete_dyn_queue, name})
+
+  @impl Capstan.Storage
+  def list_dynamic_queues(ref), do: call(ref, :list_dyn_queues)
+
+  @impl Capstan.Storage
+  def put_dynamic_cron(ref, entry, now), do: call(ref, {:put_dyn_cron, entry, now})
+
+  @impl Capstan.Storage
+  def delete_dynamic_cron(ref, name), do: call(ref, {:delete_dyn_cron, name})
+
+  @impl Capstan.Storage
+  def set_cron_paused(ref, name, paused?), do: call(ref, {:set_cron_paused, name, paused?})
+
+  @impl Capstan.Storage
+  def list_dynamic_crons(ref), do: call(ref, :list_dyn_crons)
 
   @impl Capstan.Storage
   def prune_signals(ref, now, ttl), do: call(ref, {:prune_signals, now, ttl})
@@ -526,6 +549,46 @@ defmodule Capstan.Storage.Memory do
       end)
 
     {:reply, {:ok, resettled}, put_jobs(state, resettled)}
+  end
+
+  def handle_call({:put_dyn_queue, name, opts, _now}, _from, state) do
+    {:reply, :ok, %{state | dyn_queues: Map.put(state.dyn_queues, name, opts)}}
+  end
+
+  def handle_call({:delete_dyn_queue, name}, _from, state) do
+    {:reply, :ok, %{state | dyn_queues: Map.delete(state.dyn_queues, name)}}
+  end
+
+  def handle_call(:list_dyn_queues, _from, state) do
+    {:reply, {:ok, Enum.sort(state.dyn_queues)}, state}
+  end
+
+  def handle_call({:put_dyn_cron, entry, _now}, _from, state) do
+    # Updates preserve the paused flag, mirroring the Postgres upsert.
+    paused = get_in(state.dyn_crons, [entry.name, :paused]) || false
+    entry = Map.put(entry, :paused, paused)
+
+    {:reply, :ok, %{state | dyn_crons: Map.put(state.dyn_crons, entry.name, entry)}}
+  end
+
+  def handle_call({:delete_dyn_cron, name}, _from, state) do
+    {:reply, :ok, %{state | dyn_crons: Map.delete(state.dyn_crons, name)}}
+  end
+
+  def handle_call({:set_cron_paused, name, paused?}, _from, state) do
+    case state.dyn_crons do
+      %{^name => entry} ->
+        crons = Map.put(state.dyn_crons, name, %{entry | paused: paused?})
+
+        {:reply, :ok, %{state | dyn_crons: crons}}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call(:list_dyn_crons, _from, state) do
+    {:reply, {:ok, state.dyn_crons |> Map.values() |> Enum.sort_by(& &1.name)}, state}
   end
 
   def handle_call({:prune_signals, now, ttl}, _from, state) do

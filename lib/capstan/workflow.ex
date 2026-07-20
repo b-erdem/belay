@@ -73,6 +73,7 @@ defmodule Capstan.Workflow do
             wf_ignore: entry.ignore
           )
           |> Keyword.put(:state, if(entry.deps == [], do: "ready", else: "held"))
+          |> Keyword.put(:encryption_key, Config.encryption_key(config))
 
         Capstan.Job.new(entry.worker, entry.input, opts, entry.worker.__capstan_defaults__())
       end)

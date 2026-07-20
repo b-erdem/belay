@@ -37,6 +37,7 @@ defmodule Capstan.Replay do
 
     with {:ok, job} <- fetch(storage, ref, job_id) do
       {:ok, trace} = storage.list_steps(ref, job_id)
+      job = Capstan.Runner.decrypt_for_replay(config, job)
       ctx = %Ctx{job: job, capstan: name, config: config, replay?: true}
 
       try do

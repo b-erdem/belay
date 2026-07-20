@@ -43,19 +43,19 @@ defmodule Capstan.Test.Case do
         :postgres -> [adapter: :postgres, url: Application.fetch_env!(:capstan, :test_pg_url)]
       end
 
-    capstan_opts = [
+    defaults = [
       name: name,
       storage: storage,
       clock: clock,
-      queues: Keyword.get(opts, :queues, default: [limit: 10, manual: true]),
-      notifiers: Keyword.get(opts, :notifiers, [:local]),
-      busy_poll: Keyword.get(opts, :busy_poll, 25),
-      crons: Keyword.get(opts, :crons, []),
-      poll_interval: Keyword.get(opts, :poll_interval, 100),
-      lease_ttl: Keyword.get(opts, :lease_ttl, 30_000),
-      sweep_interval: Keyword.get(opts, :sweep_interval, 200),
-      cron_interval: Keyword.get(opts, :cron_interval, 20_000)
+      queues: [default: [limit: 10, manual: true]],
+      poll_interval: 100,
+      sweep_interval: 200,
+      shutdown_grace: 500
     ]
+
+    # Everything else passes straight through, so tests can exercise any
+    # instance option without touching this helper.
+    capstan_opts = Keyword.merge(defaults, Keyword.drop(opts, [:sim_clock]))
 
     ExUnit.Callbacks.start_supervised!({Capstan, capstan_opts})
 

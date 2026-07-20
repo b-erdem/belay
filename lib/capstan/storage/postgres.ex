@@ -71,7 +71,8 @@ defmodule Capstan.Storage.Postgres do
                     unique_key unique_mode parent_id budget_usd_micros budget_tokens
                     spent_usd_micros spent_tokens errors cancel_requested inserted_at)a
 
-  defp build_insert(rows) do
+  @doc false
+  def build_insert(rows) do
     field_count = length(@insert_fields)
 
     placeholders =
@@ -121,40 +122,11 @@ defmodule Capstan.Storage.Postgres do
       if take <= 0 do
         []
       else
-        candidate_limit = if spec.partition, do: take * 4 + 16, else: take
-
-        %{rows: rows, columns: columns} =
-          q!(
-            conn,
-            """
-            SELECT * FROM capstan_jobs
-            WHERE queue = $1
-              AND ((state = 'ready' AND (ready_at IS NULL OR ready_at <= $2))
-                OR (state = 'awaiting' AND ready_at IS NOT NULL AND ready_at <= $2))
-            ORDER BY priority ASC, ready_at ASC NULLS FIRST, id ASC
-            LIMIT $3
-            FOR UPDATE SKIP LOCKED
-            """,
-            [spec.queue, now, candidate_limit]
-          )
-
-        candidates = decode_jobs(rows, columns)
-
-        picked =
+        ids =
           case spec.partition do
-            nil ->
-              Enum.take(candidates, take)
-
-            partition ->
-              per_key = spec.global_limit || spec.local_limit
-              counts = partition_counts(conn, spec.queue, partition, now)
-
-              Logic.partition_take(candidates, take, counts, per_key, fn job ->
-                Logic.partition_key(job, partition)
-              end)
+            nil -> plain_candidate_ids(conn, spec.queue, take, now)
+            partition -> partitioned_candidate_ids(conn, spec, partition, take, now)
           end
-
-        ids = Enum.map(picked, & &1.id)
 
         claimed =
           if ids == [] do
@@ -184,6 +156,67 @@ defmodule Capstan.Storage.Postgres do
       end
     end)
     |> unwrap()
+  end
+
+  defp plain_candidate_ids(conn, queue, take, now) do
+    %{rows: rows} =
+      q!(
+        conn,
+        """
+        SELECT id FROM capstan_jobs
+        WHERE queue = $1
+          AND ((state = 'ready' AND (ready_at IS NULL OR ready_at <= $2))
+            OR (state = 'awaiting' AND ready_at IS NOT NULL AND ready_at <= $2))
+        ORDER BY priority ASC, ready_at ASC NULLS FIRST, id ASC
+        LIMIT $3
+        FOR UPDATE SKIP LOCKED
+        """,
+        [queue, now, take]
+      )
+
+    List.flatten(rows)
+  end
+
+  # Exact per-key selection: rank claimable jobs within each partition key and
+  # admit ranks up to that key's remaining allowance (per-key limit minus its
+  # live-leased count). Runs under the queue's advisory lock, so the two-step
+  # select-then-update cannot race another claimer.
+  defp partitioned_candidate_ids(conn, spec, {source, key}, take, now) do
+    field = if source == :input, do: "input", else: "meta"
+    per_key = spec.global_limit || spec.local_limit
+
+    %{rows: rows} =
+      q!(
+        conn,
+        """
+        WITH running AS (
+          SELECT COALESCE(#{field}->>$4, '') AS k, count(*) AS c
+          FROM capstan_jobs
+          WHERE queue = $1 AND state = 'running' AND lease_until > $2
+          GROUP BY 1
+        ),
+        ranked AS (
+          SELECT id, priority, ready_at,
+                 COALESCE(#{field}->>$4, '') AS k,
+                 row_number() OVER (
+                   PARTITION BY COALESCE(#{field}->>$4, '')
+                   ORDER BY priority ASC, ready_at ASC NULLS FIRST, id ASC
+                 ) AS rn
+          FROM capstan_jobs
+          WHERE queue = $1
+            AND ((state = 'ready' AND (ready_at IS NULL OR ready_at <= $2))
+              OR (state = 'awaiting' AND ready_at IS NOT NULL AND ready_at <= $2))
+        )
+        SELECT r.id FROM ranked r
+        LEFT JOIN running ON running.k = r.k
+        WHERE r.rn <= GREATEST($5 - COALESCE(running.c, 0), 0)
+        ORDER BY r.priority ASC, r.ready_at ASC NULLS FIRST, r.id ASC
+        LIMIT $3
+        """,
+        [spec.queue, now, take, key, per_key]
+      )
+
+    List.flatten(rows)
   end
 
   defp clamp_global(demand, _conn, %{global_limit: nil}, _now), do: demand
@@ -253,23 +286,6 @@ defmodule Capstan.Storage.Postgres do
     )
 
     :ok
-  end
-
-  defp partition_counts(conn, queue, {source, key}, now) do
-    field = if source == :input, do: "input", else: "meta"
-
-    %{rows: rows} =
-      q!(
-        conn,
-        """
-        SELECT COALESCE(#{field}->>$2, ''), count(*) FROM capstan_jobs
-        WHERE queue = $1 AND state = 'running' AND lease_until > $3
-        GROUP BY 1
-        """,
-        [queue, key, now]
-      )
-
-    Map.new(rows, fn [k, c] -> {k, c} end)
   end
 
   # -- Leases -------------------------------------------------------------------
@@ -817,6 +833,83 @@ defmodule Capstan.Storage.Postgres do
   end
 
   @impl Capstan.Storage
+  def put_dynamic_queue(ref, name, opts, now) do
+    q!(
+      ref,
+      """
+      INSERT INTO capstan_queues (name, opts, updated_at) VALUES ($1, $2, $3)
+      ON CONFLICT (name) DO UPDATE SET opts = EXCLUDED.opts, updated_at = EXCLUDED.updated_at
+      """,
+      [name, opts, now]
+    )
+
+    :ok
+  end
+
+  @impl Capstan.Storage
+  def delete_dynamic_queue(ref, name) do
+    q!(ref, "DELETE FROM capstan_queues WHERE name = $1", [name])
+
+    :ok
+  end
+
+  @impl Capstan.Storage
+  def list_dynamic_queues(ref) do
+    %{rows: rows} = q!(ref, "SELECT name, opts FROM capstan_queues ORDER BY name", [])
+
+    {:ok, Enum.map(rows, fn [name, opts] -> {name, opts} end)}
+  end
+
+  @impl Capstan.Storage
+  def put_dynamic_cron(ref, entry, now) do
+    q!(
+      ref,
+      """
+      INSERT INTO capstan_crons (name, expression, worker, input, opts, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (name) DO UPDATE
+        SET expression = EXCLUDED.expression, worker = EXCLUDED.worker,
+            input = EXCLUDED.input, opts = EXCLUDED.opts,
+            updated_at = EXCLUDED.updated_at
+      """,
+      [entry.name, entry.expression, entry.worker, entry.input, entry.opts, now]
+    )
+
+    :ok
+  end
+
+  @impl Capstan.Storage
+  def delete_dynamic_cron(ref, name) do
+    q!(ref, "DELETE FROM capstan_crons WHERE name = $1", [name])
+
+    :ok
+  end
+
+  @impl Capstan.Storage
+  def set_cron_paused(ref, name, paused?) do
+    q!(ref, "UPDATE capstan_crons SET paused = $2 WHERE name = $1", [name, paused?])
+
+    :ok
+  end
+
+  @impl Capstan.Storage
+  def list_dynamic_crons(ref) do
+    %{rows: rows} =
+      q!(
+        ref,
+        "SELECT name, expression, worker, input, opts, paused FROM capstan_crons ORDER BY name",
+        []
+      )
+
+    entries =
+      for [name, expression, worker, input, opts, paused] <- rows do
+        %{name: name, expression: expression, worker: worker, input: input, opts: opts, paused: paused}
+      end
+
+    {:ok, entries}
+  end
+
+  @impl Capstan.Storage
   def prune_signals(ref, now, ttl) do
     q!(ref, "DELETE FROM capstan_signals WHERE inserted_at < $1", [
       DateTime.add(now, -ttl, :second)
@@ -841,7 +934,8 @@ defmodule Capstan.Storage.Postgres do
 
   # -- Decoding -----------------------------------------------------------------
 
-  defp decode_jobs(rows, columns), do: Enum.map(rows, &decode_job(&1, columns))
+  @doc false
+  def decode_jobs(rows, columns), do: Enum.map(rows, &decode_job(&1, columns))
 
   defp decode_job(row, columns) do
     map =
@@ -962,6 +1056,23 @@ defmodule Capstan.Storage.Postgres do
        count int NOT NULL DEFAULT 0,
        PRIMARY KEY (bucket, window_start)
      );
+     """},
+    {2,
+     """
+     CREATE TABLE IF NOT EXISTS capstan_queues (
+       name text PRIMARY KEY,
+       opts jsonb NOT NULL DEFAULT '{}',
+       updated_at timestamptz
+     );
+     CREATE TABLE IF NOT EXISTS capstan_crons (
+       name text PRIMARY KEY,
+       expression text NOT NULL,
+       worker text NOT NULL,
+       input jsonb NOT NULL DEFAULT '{}',
+       opts jsonb NOT NULL DEFAULT '{}',
+       paused boolean NOT NULL DEFAULT false,
+       updated_at timestamptz
+     );
      """}
   ]
 
@@ -1017,7 +1128,7 @@ defmodule Capstan.Storage.Postgres do
     with_conn(url, fn conn ->
       q!(
         conn,
-        "DROP TABLE IF EXISTS capstan_jobs, capstan_steps, capstan_events, capstan_signals, capstan_rate, capstan_meta CASCADE",
+        "DROP TABLE IF EXISTS capstan_jobs, capstan_steps, capstan_events, capstan_signals, capstan_rate, capstan_queues, capstan_crons, capstan_meta CASCADE",
         []
       )
     end)
@@ -1029,7 +1140,7 @@ defmodule Capstan.Storage.Postgres do
   def truncate!(ref) do
     q!(
       ref,
-      "TRUNCATE capstan_jobs, capstan_steps, capstan_events, capstan_signals, capstan_rate RESTART IDENTITY",
+      "TRUNCATE capstan_jobs, capstan_steps, capstan_events, capstan_signals, capstan_rate, capstan_queues, capstan_crons RESTART IDENTITY",
       []
     )
 

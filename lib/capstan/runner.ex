@@ -18,6 +18,8 @@ defmodule Capstan.Runner do
   def execute(%Config{} = config, %Job{} = job) do
     register_running(config, job.id)
 
+    job = maybe_decrypt(config, job)
+
     ctx = %Ctx{job: job, capstan: config.name, config: config}
     started = System.monotonic_time()
 
@@ -372,6 +374,17 @@ defmodule Capstan.Runner do
   end
 
   # -- Helpers ------------------------------------------------------------------
+
+  # Ciphertext never leaves the database row; plaintext exists only in the
+  # executing process.
+  defp maybe_decrypt(config, %Job{input: %{"$enc" => _}} = job) do
+    Job.decrypt_input(job, Config.encryption_key(config))
+  end
+
+  defp maybe_decrypt(_config, job), do: job
+
+  @doc false
+  def decrypt_for_replay(config, job), do: maybe_decrypt(config, job)
 
   defp check_cancel!(config, job) do
     {storage, ref} = config.storage_ref

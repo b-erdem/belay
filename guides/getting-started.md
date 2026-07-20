@@ -114,3 +114,4 @@ exactly once cluster-wide.
 - [Building agents](agents.md) — budgets, human approval, fan-out, streaming
 - [Operations](operations.md) — leases, shutdown, retention, observability
 - [Testing](testing.md) — deterministic tests with `drain` and a SimClock
+- Add `{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}` for the built-in UI

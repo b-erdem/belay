@@ -68,6 +68,20 @@ defmodule Capstan.LimitsTest do
     assert length(claim!(name, :rated, 10)) == 4
   end
 
+  test "partitioned claims are exact under heavy key skew", %{name: name} do
+    # 30 jobs for tenant "a" ahead of a single "b" job. With per-key limit 1
+    # and demand 2, an over-fetch heuristic would drown "b" in "a" candidates;
+    # exact ranking must claim one of each.
+    fill!(name, :tenants, 30, fn _ -> %{"tenant" => "a"} end)
+    fill!(name, :tenants, 1, fn _ -> %{"tenant" => "b"} end)
+
+    claimed = claim!(name, :tenants, 2)
+
+    tenants = claimed |> Enum.map(& &1.input["tenant"]) |> Enum.sort()
+
+    assert tenants == ["a", "b"]
+  end
+
   test "partitions cap per key without touching the overflow", %{name: name} do
     [a1, a2, _b1] =
       fill!(name, :tenants, 3, fn i -> %{"tenant" => if(i == 3, do: "b", else: "a")} end)

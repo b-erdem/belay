@@ -95,6 +95,21 @@ Terminal jobs are pruned with their steps and events by the sweeper:
 Set a state to `:infinity` to keep it forever (and own the table growth).
 Incomplete jobs are never pruned.
 
+## The dashboard
+
+One child spec, zero dependencies:
+
+```elixir
+{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004, token: System.fetch_env!("DASH_TOKEN")}
+```
+
+Live queue tiles (with each queue's limits and rates), a filterable job
+list, a drawer with the full journal - steps with costs, events, errors,
+children - a rendered workflow DAG, and retry/cancel/signal/steer actions
+(gated by the same `authorizer:` contract as the MCP server). It binds
+127.0.0.1 by default and speaks plain HTTP; front it with your proxy for
+remote access.
+
 ## Day-2 tooling
 
 ```elixir
@@ -127,11 +142,17 @@ Capstan.Telemetry.attach_default_logger(:info)
 
 - The claim path is `FOR UPDATE SKIP LOCKED` over partial indexes; the
   migration creates every index the engine relies on.
-- **LISTEN/NOTIFY is not used.** PgBouncer transaction pooling, RDS Proxy,
-  and serverless Postgres are all fine.
+- **LISTEN/NOTIFY is never load-bearing.** The optional accelerator uses
+  it; correctness never does. PgBouncer transaction pooling, RDS Proxy, and
+  serverless Postgres are all fine (see Dispatch latency for the one
+  direct-connection rule when you enable the accelerator).
 - Retention is a `DELETE ... LIMIT` batch per sweep; autovacuum handles the
   rest at moderate scale. At very high throughput, shorten retention before
   reaching for anything exotic.
-- Known limit: partitioned claims over-fetch candidates by a bounded
-  heuristic (take×4+16); pathological single-key skew can under-fill a claim
-  round. Documented, poll picks it up next round.
+- Partitioned claims are exact: per-key allowances are computed with a
+  window-function ranking inside the claim transaction, under the queue's
+  advisory lock — heavy key skew cannot starve minority keys.
+- Measured throughput (`bench/throughput.exs`): ~416 trivial jobs/s
+  end-to-end on a laptop with 3 worker processes and unbatched acks; each
+  job costs a claim and an ack transaction. Batched acking is the known
+  post-1.0 lever for multiples beyond that.

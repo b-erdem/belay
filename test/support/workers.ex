@@ -366,3 +366,19 @@ defmodule Capstan.Test.Strict do
   @impl Capstan.Worker
   def run(%Ctx{job: job}), do: {:ok, job.input}
 end
+
+defmodule Capstan.Test.Secret do
+  @moduledoc false
+  use Capstan.Worker, queue: :default, max_attempts: 1, encrypted: true
+
+  alias Capstan.Ctx
+
+  @impl Capstan.Worker
+  def run(%Ctx{job: job}), do: {:ok, job.input}
+end
+
+defmodule Capstan.Test.Keys do
+  @moduledoc false
+
+  def test_key, do: :binary.copy(<<7>>, 32)
+end

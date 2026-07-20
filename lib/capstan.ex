@@ -72,11 +72,6 @@ defmodule Capstan do
 
     Config.put(config)
 
-    producers =
-      for {queue, spec} <- config.queues, not spec.manual do
-        Supervisor.child_spec({Capstan.Producer, {config, queue}}, id: {:producer, queue})
-      end
-
     children =
       [
         {Registry, keys: :unique, name: registry(config.name)},
@@ -86,11 +81,16 @@ defmodule Capstan do
       ] ++
         Capstan.Notifier.children(config) ++
         [
-        {Task.Supervisor, name: task_sup(config.name)},
-        {Capstan.LeaseKeeper, config},
-        {Capstan.Sweeper, config},
-        {Capstan.CronScheduler, config}
-      ] ++ producers
+          {Task.Supervisor, name: task_sup(config.name)},
+          {Capstan.LeaseKeeper, config},
+          {Capstan.Sweeper, config},
+          {Capstan.CronScheduler, config},
+          # Producers live under a DynamicSupervisor so runtime queue CRUD
+          # (Capstan.Queues) can start and stop them; QueueSync reconciles
+          # static config + dynamic rows on every node.
+          {DynamicSupervisor, name: producer_sup(config.name), strategy: :one_for_one},
+          {Capstan.QueueSync, config}
+        ]
 
     # Lenient restart budget: transient storage failures must never take the
     # tree down — the loops themselves also rescue and back off (see Producer,
@@ -107,6 +107,9 @@ defmodule Capstan do
   @doc false
   def task_sup(name), do: Module.concat(name, "Tasks")
 
+  @doc false
+  def producer_sup(name), do: Module.concat(name, "Producers")
+
   # -- Inserting ----------------------------------------------------------------
 
   @doc """
@@ -120,7 +123,13 @@ defmodule Capstan do
     {storage, ref} = config.storage_ref
     now = Config.now(config)
 
-    row = Job.new(worker, input, Keyword.put(opts, :now, now), worker.__capstan_defaults__())
+    row =
+      Job.new(
+        worker,
+        input,
+        opts |> Keyword.put(:now, now) |> Keyword.put(:encryption_key, Config.encryption_key(config)),
+        worker.__capstan_defaults__()
+      )
 
     case storage.insert_jobs(ref, [row], now) do
       {:ok, [job]} ->
@@ -145,9 +154,16 @@ defmodule Capstan do
     {storage, ref} = config.storage_ref
     now = Config.now(config)
 
+    key = Config.encryption_key(config)
+
     rows =
       Enum.map(buildables, fn {Capstan.Worker, worker, input, opts} ->
-        Job.new(worker, input, Keyword.put(opts, :now, now), worker.__capstan_defaults__())
+        Job.new(
+          worker,
+          input,
+          opts |> Keyword.put(:now, now) |> Keyword.put(:encryption_key, key),
+          worker.__capstan_defaults__()
+        )
       end)
 
     {:ok, jobs} = storage.insert_jobs(ref, rows, now)

@@ -84,9 +84,13 @@ leader-elected, or paid. Capstan's bets:
 | Workflows & batches | declared DAGs with transactional release and cascade policies; batch sugar |
 | Event streams | `emit/2` + live subscriptions + offset replay — token streaming that survives crashes |
 | Replay debugging | `Capstan.Replay.dry_run/2` — re-run code against the recorded journal, divergence reported |
-| Unique jobs | constraint-backed: `unique: "key"` or `unique: [key: k, within: 3600]` |
 | Cluster limits | `global_limit`, sliding-window `rate` (request- or **token**-based with true-up), per-tenant `partition` |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with slot dedup |
+| **Embedded dashboard** | `{Capstan.Dashboard, capstan: X, port: 4004}` — zero-dependency web UI: live tiles, journal drawer, **workflow DAG view**, retry/cancel/signal/steer |
+| Transactional enqueue | `Capstan.Txn.insert/3` inside your Postgrex or Ecto transaction; wake-ups deliver exactly on commit |
+| Unique jobs | constraint-backed: `unique: "key"`, windowed, or `scope: :always` |
+| Encrypted inputs | `encrypted: true` — AES-256-GCM at rest, plaintext only in the executing process |
+| Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — add, change, pause queues and schedules with no deploy, leaderlessly |
 | Operations | `stats`, `list_jobs`, `retry_job`, pause/resume, retention pruning, telemetry, graceful shutdown |
 | Fast dispatch | adaptive burst polling + opt-in `pg_notify` accelerator: ~11ms p50 cross-process round trips (measured, `bench/`) |
 | **MCP server** | `mix capstan.mcp` — AI assistants inspect and operate the queue over stdio, with a pluggable authorizer for mutations |
@@ -95,7 +99,7 @@ leader-elected, or paid. Capstan's bets:
 
 ```elixir
 # mix.exs
-{:capstan, "~> 1.0.0-rc.1"}
+{:capstan, "~> 1.0.0-rc.4"}
 
 # once, at deploy time
 Capstan.Storage.Postgres.migrate!(db_url)
@@ -133,22 +137,27 @@ backoff, waits, rate windows, lease expiry, cron — deterministic in tests.
 
 ## Status
 
-**1.0.0-rc.1.** The full 1.0 feature set is implemented and covered by 64
-tests running identically against both storage adapters (see
-[docs/ZERO_TO_ONE.md](docs/ZERO_TO_ONE.md) for the definition of done and
-what remains between rc and final: chaos soak, external design partners,
-hex publish). Capstan is new — the design is careful and the suite is
-strong, but production miles are the one feature that can't be rushed.
-Dev/test:
+**1.0.0-rc.4.** The full 1.0 feature set — through the embedded dashboard,
+transactional enqueue, runtime CRUD, and encryption — is implemented and
+covered by 84 tests running identically against both storage adapters.
+It has survived repeated chaos soaks (`kill -9` every ~4s across worker OS
+processes plus full Postgres restarts, thirteen invariants verified —
+report in `soak/REPORT.md`), and its dispatch latency and throughput are
+measured, not claimed (`bench/`): ~11ms p50 insert→result across processes,
+~416 jobs/s end-to-end on a laptop with unbatched acks. See
+[docs/ZERO_TO_ONE.md](docs/ZERO_TO_ONE.md) for what remains before 1.0
+final: a 48h endurance soak, external design partners, hex publish.
+Capstan is new — the design is careful and the suite is strong, but
+production miles are the one feature that can't be rushed.
 
 ```
 mix test                # in-memory adapter
 CAPSTAN_PG=1 mix test   # Postgres 16
 ```
 
-Post-1.0 roadmap: LiveView dashboard with the workflow DAG view, SQLite
-adapter, Ecto bridge for same-transaction enqueue, runtime queue/cron CRUD,
-per-key exact partitioned claims, encrypted inputs.
+Post-1.0: SQLite storage adapter (designed; Memory covers dev/test today),
+batched acking for higher throughput, per-workflow budgets, fork/what-if
+replay.
 
 ## License
 

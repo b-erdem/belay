@@ -81,6 +81,13 @@ defmodule Capstan.Job do
 
     input = Capstan.InputSchema.validate!(worker, defaults[:input_schema], input)
 
+    input =
+      if defaults[:encrypted] do
+        encrypt_input(worker, input, Keyword.get(opts, :encryption_key))
+      else
+        input
+      end
+
     %{
       kind: worker |> to_string() |> String.replace_prefix("Elixir.", ""),
       queue: to_string(Keyword.get(opts, :queue, defaults[:queue] || "default")),
@@ -145,6 +152,45 @@ defmodule Capstan.Job do
 
   defp opt_string(nil), do: nil
   defp opt_string(value), do: to_string(value)
+
+  # AES-256-GCM with a random 96-bit IV; ciphertext stored as
+  # %{"$enc" => base64(iv <> tag <> ciphertext)}. Validation runs on the
+  # plaintext first, so schemas and encryption compose.
+  @aad "capstan.input.v1"
+
+  defp encrypt_input(worker, _input, nil) do
+    raise ArgumentError,
+          "#{inspect(worker)} declares encrypted: true but the Capstan instance has no " <>
+            "encryption: [key: {mod, fun, args}] configured"
+  end
+
+  defp encrypt_input(_worker, input, key) do
+    iv = :crypto.strong_rand_bytes(12)
+    plaintext = Jason.encode!(input)
+
+    {ciphertext, tag} =
+      :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, @aad, true)
+
+    %{"$enc" => Base.encode64(iv <> tag <> ciphertext)}
+  end
+
+  @doc false
+  def decrypt_input(%__MODULE__{input: %{"$enc" => encoded}} = job, key)
+      when is_binary(key) do
+    <<iv::binary-12, tag::binary-16, ciphertext::binary>> = Base.decode64!(encoded)
+
+    case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, ciphertext, @aad, tag, false) do
+      plaintext when is_binary(plaintext) -> %{job | input: Jason.decode!(plaintext)}
+      :error -> raise ArgumentError, "input decryption failed for job #{job.id} (wrong key?)"
+    end
+  end
+
+  def decrypt_input(%__MODULE__{input: %{"$enc" => _}} = job, nil) do
+    raise ArgumentError,
+          "job #{job.id} has an encrypted input but no encryption key is configured"
+  end
+
+  def decrypt_input(job, _key), do: job
 
   defp money_micros(nil), do: nil
   defp money_micros(usd) when is_number(usd), do: round(usd * 1_000_000)

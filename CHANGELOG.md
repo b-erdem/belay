@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.0-rc.4 — 2026-07-20
+
+The "better at every dimension" release: the embedded dashboard, transactional
+enqueue, runtime CRUD, encryption, and exact partitioned claims.
+
+### Added
+- **`Capstan.Dashboard`** — an embedded web dashboard with zero dependencies
+  (hand-rolled HTTP over `gen_tcp`, single-file UI, SSE live updates): queue
+  tiles with limits and live counts, filterable job list, a journal drawer
+  (steps with costs, events, errors, children), a rendered **workflow DAG**,
+  and retry/cancel/signal/steer actions behind an optional token and the same
+  pluggable authorizer as the MCP server.
+- **`Capstan.Txn`** — transactional enqueue inside your own Postgrex or Ecto
+  transaction (duck-typed over `query!`; still no Ecto dependency). With the
+  `:postgres` notifier, the wake-up is issued via `pg_notify` *inside* the
+  transaction, so it delivers exactly on commit and never on rollback.
+- **Runtime queue and cron CRUD** — `Capstan.Queues.put/delete/list` and
+  `Capstan.Crons.put/delete/pause/resume/list`, persisted in the database,
+  validated eagerly, reconciled by every node's `QueueSync` (producers now
+  live under a DynamicSupervisor); dynamic entries override static config by
+  name. Leaderless, like everything else.
+- **Encrypted inputs** — `use Capstan.Worker, encrypted: true` plus
+  `encryption: [key: {mod, fun, args}]`: AES-256-GCM envelopes at rest,
+  plaintext only inside the executing process; schemas validate before
+  encryption; replay decrypts transparently.
+- Shared `Capstan.View` serializers so the dashboard and MCP describe jobs
+  identically.
+- `bench/throughput.exs` — measured ~416 trivial jobs/s end-to-end on a
+  laptop (3 worker processes, unbatched acks).
+
+### Changed
+- **Partitioned claims are now exact.** Per-key allowances are computed with
+  a window-function ranking inside the claim transaction (under the queue
+  advisory lock), replacing the bounded over-fetch heuristic — heavy key
+  skew can no longer starve minority keys (regression-tested with 30:1 skew).
+
 ## 1.0.0-rc.3 — 2026-07-20
 
 Dispatch-latency release: agent workloads are bursts of short tasks, so

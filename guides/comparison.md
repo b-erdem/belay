@@ -15,7 +15,7 @@ An honest map. Every project here is good software; the question is fit.
 | Event streams / replay debug | ✓ / ✓ | ✗ / ✗ | ✗ / ✗ | ✓ / ✓ | ✗ / ✗ | ✗ / ✗ |
 | MCP / agent-operable | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Leaderless | ✓ | leader-elected plugins | leader-elected | server-managed | n/a | leader-elected |
-| Web UI | not yet | ✓ (free) | ✓ | ✓ | ✓ | ✓ |
+| Web UI | ✓ (embedded, zero-dep, DAG view) | ✓ (free) | ✓ | ✓ | ✓ | ✓ |
 | Price | free, Apache-2.0 | free | $150/mo/app | free + cloud | $995+/yr | $125/mo |
 | Battle-tested years | **0** | 6+ | 5+ | 8+ | 12+ | 2+ |
 
@@ -59,9 +59,8 @@ fills.
 
 ## When you should not use Capstan
 
-- You need a UI today (ours is on the roadmap; Oban Web is excellent).
-- You need SQLite/MySQL storage, or enqueueing inside your Ecto
-  transactions (both planned; not in rc).
+- You need SQLite/MySQL storage (SQLite is designed but post-1.0; the
+  in-memory adapter covers dev and tests today).
 - You need something proven over years. Capstan is honest about being new:
   the suite is strong and runs identically against both storage adapters,
   but production miles are the one feature that can't be implemented in a

@@ -14,7 +14,7 @@ defmodule Capstan.Testing do
   """
   def drain(name, queue, opts \\ []) do
     config = Config.fetch!(name)
-    spec = Config.queue_spec(config, queue)
+    spec = Capstan.Queues.resolve_spec!(config, queue)
     max_iterations = Keyword.get(opts, :max_iterations, 1_000)
 
     do_drain(config, spec, %{}, max_iterations)

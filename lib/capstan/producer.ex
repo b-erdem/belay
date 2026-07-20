@@ -8,19 +8,18 @@ defmodule Capstan.Producer do
 
   alias Capstan.{Config, Runner}
 
-  def start_link({config, queue}) do
-    GenServer.start_link(__MODULE__, {config, to_string(queue)},
+  def start_link({config, queue, spec}) do
+    GenServer.start_link(__MODULE__, {config, to_string(queue), spec},
       name: {:via, Registry, {Capstan.registry(config.name), {:producer, to_string(queue)}}}
     )
   end
 
-  def child_spec({config, queue}) do
-    %{id: {:producer, queue}, start: {__MODULE__, :start_link, [{config, queue}]}}
+  def child_spec({config, queue, spec}) do
+    %{id: {:producer, queue}, start: {__MODULE__, :start_link, [{config, queue, spec}]}}
   end
 
   @impl GenServer
-  def init({config, queue}) do
-    spec = Config.queue_spec(config, queue)
+  def init({config, queue, spec}) do
 
     :pg.join(Capstan.pg_scope(config.name), {:producers, queue}, self())
 
@@ -286,11 +285,7 @@ defmodule Capstan.CronScheduler do
 
   @impl GenServer
   def init(config) do
-    if config.crons == [] do
-      :ignore
-    else
-      {:ok, schedule(config)}
-    end
+    {:ok, schedule(config)}
   end
 
   @impl GenServer
@@ -300,10 +295,11 @@ defmodule Capstan.CronScheduler do
     {storage, ref} = config.storage_ref
 
     rows =
-      for cron <- config.crons, CronExpr.matches?(cron.expr, slot) do
+      for cron <- Capstan.Crons.schedule_entries(config), CronExpr.matches?(cron.expr, slot) do
         opts =
           cron.opts
           |> Keyword.merge(now: now, cron_name: cron.name, cron_slot: slot)
+          |> Keyword.put(:encryption_key, Config.encryption_key(config))
 
         Job.new(cron.worker, cron.input, opts, cron.worker.__capstan_defaults__())
       end
