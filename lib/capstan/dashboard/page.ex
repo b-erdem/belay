@@ -221,7 +221,15 @@ defmodule Capstan.Dashboard.Page do
     es.onmessage = e => { renderOverview(JSON.parse(e.data)); document.getElementById('live').style.opacity = 1; };
     es.onerror = () => { document.getElementById('live').style.opacity = .3; };
   }
-  j('/api/overview').then(renderOverview).then(loadJobs);
+  // Deep links: #job=123 / #workflow=<id> open the drawer on load — paste
+  // them straight from alerts or logs.
+  function openFromHash() {
+    const m = location.hash.match(/^#(job|workflow)=(.+)$/);
+    if (m) (m[1] === 'job' ? openJob : openWorkflow)(m[1] === 'job' ? +m[2] : m[2]);
+  }
+  window.addEventListener('hashchange', openFromHash);
+
+  j('/api/overview').then(renderOverview).then(loadJobs).then(openFromHash);
   connect();
   setInterval(loadJobs, 3000);
   </script>

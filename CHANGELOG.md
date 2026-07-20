@@ -39,7 +39,7 @@ enqueue, runtime CRUD, encryption, and exact partitioned claims.
   `encryption: [key: {mod, fun, args}]`: AES-256-GCM envelopes at rest,
   plaintext only inside the executing process; schemas validate before
   encryption; replay decrypts transparently.
-- Shared `Capstan.View` serializers so the dashboard and MCP describe jobs
+- Shared view serializers (lib/capstan/view.ex) so the dashboard and MCP describe jobs
   identically.
 - `bench/throughput.exs` — measured ~416 trivial jobs/s end-to-end on a
   laptop (3 worker processes, unbatched acks).

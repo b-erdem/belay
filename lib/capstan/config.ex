@@ -1,5 +1,12 @@
 defmodule Capstan.Config do
-  @moduledoc false
+  @moduledoc """
+  The resolved runtime configuration of a Capstan instance.
+
+  Built from the options passed to `Capstan.start_link/1`; carried through
+  every storage and notifier callback. Applications normally never construct
+  one — it is documented because custom storage adapters and notifiers
+  receive it.
+  """
 
   defstruct name: Capstan,
             storage: nil,

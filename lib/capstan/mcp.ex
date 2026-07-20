@@ -284,9 +284,13 @@ defmodule Capstan.MCP do
     end
   end
 
+  @doc false
   defdelegate job_summary(job), to: Capstan.View
+  @doc false
   defdelegate job_detail(job), to: Capstan.View
+  @doc false
   defdelegate step_summary(step), to: Capstan.View
+  @doc false
   defdelegate event_summary(event), to: Capstan.View
 
 

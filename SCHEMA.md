@@ -261,7 +261,7 @@ matching flag in `wf_ignore` (`"failed"`/`"cancelled"`); it **dooms** when
 any dep is terminal-failed without its flag. Iterate to fixpoint, doomed
 jobs counting as `cancelled` for their own dependents. Apply: releases →
 `ready` (guard `WHERE state='held'`), dooms → `cancelled` + `finished_at`
-(same guard). Reference: `Capstan.Storage.Logic.settle/1`.
+(same guard). Reference implementation: settle/1 in lib/capstan/storage.ex.
 
 ### 8.4 Dynamic children
 Spawn MUST be doubly idempotent: (a) the spawn is a memoized step named

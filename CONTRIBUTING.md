@@ -21,7 +21,8 @@ docker run -d --name capstan-postgres -e POSTGRES_PASSWORD=capstan \
 ## The rules that matter
 
 1. **Storage semantics live once.** Anything both adapters must agree on
-   belongs in `Capstan.Storage.Logic` (pure) or in the shared test suite.
+   belongs in the pure shared-logic module (lib/capstan/storage.ex) or in
+   the shared test suite.
    If you add a storage operation, implement it in Memory *and* Postgres and
    cover it with a test that runs against both — the suite is the contract.
 2. **Never read the wall clock in engine code.** Take `now` as an argument

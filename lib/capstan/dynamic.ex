@@ -9,7 +9,7 @@ defmodule Capstan.Queues do
       Capstan.Queues.delete(MyApp.Capstan, :imports)
       Capstan.Queues.list(MyApp.Capstan)
 
-  Each node's `Capstan.QueueSync` reconciles its local producers against the
+  Each node's queue-sync process reconciles its local producers against the
   table every `dynamic_sync` interval (default 5s): new entries start
   producers, deletions stop them, changed options restart them. A dynamic
   entry with the same name as a static queue overrides it. Options are

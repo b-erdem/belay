@@ -36,6 +36,8 @@ defmodule Capstan.MixProject do
         "guides/comparison.md",
         "DESIGN.md",
         "SCHEMA.md",
+        "docs/ZERO_TO_ONE.md",
+        "CONTRIBUTING.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [Guides: ~r/guides\/.*/]

@@ -224,7 +224,7 @@ defmodule Capstan.Worker do
 
   Return values: `:ok` | `{:ok, result}` | `{:error, reason}` (retry with
   backoff) | `{:cancel, reason}` | `{:snooze, seconds}`. Raised exceptions
-  retry. `Capstan.step/4`, `Capstan.await/3`, and `Capstan.sleep/2` manage
+  retry. `Capstan.step/4`, `Capstan.await/3`, and `Capstan.sleep/3` manage
   control flow internally.
   """
 

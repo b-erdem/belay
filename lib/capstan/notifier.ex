@@ -62,11 +62,13 @@ defmodule Capstan.Notifier do
 end
 
 defmodule Capstan.Notifier.Local do
-  @moduledoc false
+  @moduledoc """
+  The always-on notifier: registry pokes on this node, `:pg` fan-out to
+  clustered BEAM nodes. Configured as `:local`.
+  """
 
-  # Registry pokes on this node; :pg fan-out to clustered BEAM nodes. Result
-  # delivery is handled directly by the runner's local registry dispatch, so
-  # it's a no-op here.
+  # Result delivery is handled directly by the runner's local registry
+  # dispatch, so it's a no-op here.
 
   @behaviour Capstan.Notifier
 
@@ -91,7 +93,11 @@ defmodule Capstan.Notifier.Local do
 end
 
 defmodule Capstan.Notifier.Postgres do
-  @moduledoc false
+  @moduledoc """
+  The opt-in `pg_notify` accelerator (configured as `:postgres`): wake-ups
+  ride the database itself for fleets that share Postgres without an Erlang
+  cluster. See `Capstan.Notifier` for semantics and caveats.
+  """
 
   # pg_notify accelerator. The channel is derived from the database name, so
   # separate Capstan databases sharing a Postgres cluster don't cross-talk;

@@ -44,11 +44,39 @@ defmodule Capstan do
   fail the job with `:budget_exceeded` when step costs cross the cap. Signals
   (`Capstan.signal_job/4`) wake awaiting jobs instantly; `steer/3` injects
   guidance readable via `steering/1` at step boundaries.
+
+  ## Instance options
+
+  | Option | Default | Purpose |
+  |---|---|---|
+  | `:name` | `Capstan` | instance name (atom); first argument to every API call |
+  | `:storage` | required | `[adapter: :postgres, url: ...]` or `[adapter: :memory]` |
+  | `:queues` | `[]` | `queue: limit` or `queue: [limit:, global_limit:, rate:, partition:, manual:]` |
+  | `:crons` | `[]` | `[[name:, expr:, worker:, input:, opts:]]`; merged with `Capstan.Crons` rows |
+  | `:notifiers` | `[:local]` | add `:postgres` for cross-fleet `pg_notify` wake-ups |
+  | `:poll_interval` | `500` | idle polling ceiling (ms) |
+  | `:busy_poll` | `25` | hot polling cadence (ms) |
+  | `:lease_ttl` | `30_000` | running-job lease (ms); crash-orphan recovery window |
+  | `:sweep_interval` | `5_000` | reclaim/retention cadence (ms) |
+  | `:cron_interval` | `20_000` | cron tick (ms; slots dedup regardless) |
+  | `:dynamic_sync` | `5_000` | runtime-queue reconciliation cadence (ms) |
+  | `:shutdown_grace` | `15_000` | time running jobs get on shutdown (ms) |
+  | `:retention` | 1d/7d/7d | per-terminal-state pruning: `[succeeded:, failed:, cancelled:]` seconds or `:infinity` |
+  | `:signal_ttl` | `604_800` | seconds before undelivered signals are pruned |
+  | `:encryption` | `nil` | `[key: {mod, fun, args}]` returning a 32-byte key |
+  | `:clock` | system | `Capstan.Clock` implementation (tests use `Capstan.Clock.Sim`) |
+  | `:node_id` | derived | stable identity for leases |
   """
 
   use Supervisor
 
   alias Capstan.{Config, Ctx, Job, Runner}
+
+  @typedoc "An instance name, as given in `:name`."
+  @type instance :: atom()
+
+  @typedoc "A job build produced by `YourWorker.new/2`."
+  @type buildable :: {Capstan.Worker, module(), map(), keyword()}
 
   # -- Supervision --------------------------------------------------------------
 
@@ -118,6 +146,7 @@ defmodule Capstan do
   Options on `new/2`: `:queue`, `:priority`, `:max_attempts`, `:schedule_in`,
   `:partition_key`, `:meta`, `:budget` (`[usd: 5.0, tokens: 100_000]`).
   """
+  @spec insert(instance(), buildable()) :: {:ok, Job.t()}
   def insert(name, {Capstan.Worker, worker, input, opts}) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -149,6 +178,7 @@ defmodule Capstan do
   Insert many jobs at once. Rows deduped by uniqueness or cron slots are
   silently skipped; only inserted jobs are returned.
   """
+  @spec insert_all(instance(), [buildable()]) :: [Job.t()]
   def insert_all(name, buildables) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -175,6 +205,7 @@ defmodule Capstan do
 
   # -- Introspection & control --------------------------------------------------
 
+  @spec get_job(instance(), integer()) :: {:ok, Job.t()} | :error
   def get_job(name, id) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -183,6 +214,7 @@ defmodule Capstan do
   end
 
   @doc "Cancel a job: immediate for parked states, cooperative for running."
+  @spec cancel(instance(), integer()) :: {:ok, :cancelled | :requested | :noop}
   def cancel(name, id) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -193,6 +225,7 @@ defmodule Capstan do
   end
 
   @doc "List a job's recorded steps with costs."
+  @spec steps(instance(), integer()) :: {:ok, [map()]}
   def steps(name, id) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -201,6 +234,7 @@ defmodule Capstan do
   end
 
   @doc "Per-queue, per-state job counts."
+  @spec stats(instance()) :: %{optional(String.t()) => %{optional(String.t()) => non_neg_integer()}}
   def stats(name) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -216,6 +250,7 @@ defmodule Capstan do
   `:workflow_id`, `:parent_id`, `:before_id` (pagination cursor), `:limit`
   (default 50).
   """
+  @spec list_jobs(instance(), Enumerable.t()) :: [Job.t()]
   def list_jobs(name, filters \\ %{}) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -225,6 +260,7 @@ defmodule Capstan do
   end
 
   @doc "Resurrect a failed or cancelled job (grants one more attempt if exhausted)."
+  @spec retry_job(instance(), integer()) :: {:ok, Job.t()} | {:error, :not_retryable | :not_found}
   def retry_job(name, id) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -237,9 +273,11 @@ defmodule Capstan do
   end
 
   @doc "Stop a queue's local producer from claiming (running jobs finish)."
+  @spec pause_queue(instance(), atom() | String.t()) :: :ok | {:error, :no_producer}
   def pause_queue(name, queue), do: send_producer(name, queue, :capstan_pause)
 
   @doc "Resume a paused queue."
+  @spec resume_queue(instance(), atom() | String.t()) :: :ok | {:error, :no_producer}
   def resume_queue(name, queue), do: send_producer(name, queue, :capstan_resume)
 
   defp send_producer(name, queue, message) do
@@ -257,6 +295,7 @@ defmodule Capstan do
   Await a job's terminal result. Returns `{:ok, value}` for success,
   `{:error, {:job, state}}` for failure/cancellation, `{:error, :timeout}`.
   """
+  @spec await_result(instance(), integer(), timeout()) :: {:ok, term()} | {:error, {:job, :failed | :cancelled} | :timeout}
   def await_result(name, id, timeout \\ 5_000) do
     config = Config.fetch!(name)
 
@@ -307,6 +346,7 @@ defmodule Capstan do
   # -- Signals ------------------------------------------------------------------
 
   @doc "Deliver a durable signal to a scope, waking any awaiting jobs."
+  @spec signal(instance(), String.t() | atom(), String.t() | atom(), map()) :: :ok
   def signal(name, scope, signal_name, payload \\ %{}) when is_map(payload) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -320,15 +360,18 @@ defmodule Capstan do
     :ok
   end
 
+  @spec signal_job(instance(), integer(), String.t() | atom(), map()) :: :ok
   def signal_job(name, job_id, signal_name, payload \\ %{}) do
     signal(name, "job:#{job_id}", signal_name, payload)
   end
 
   @doc "Inject steering guidance readable by the running job via `steering/1`."
+  @spec steer(instance(), integer(), map()) :: :ok
   def steer(name, job_id, payload) when is_map(payload) do
     signal_job(name, job_id, "$steer", payload)
   end
 
+  @spec clear_signal(instance(), String.t() | atom(), String.t() | atom()) :: :ok
   def clear_signal(name, scope, signal_name) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -339,6 +382,7 @@ defmodule Capstan do
   # -- In-job APIs (take the ctx) -----------------------------------------------
 
   @doc "Run `fun` at most once per job; memoized with optional `cost: [usd:, tokens:]`."
+  @spec step(Ctx.t(), String.t() | atom(), (-> term()), keyword()) :: term()
   def step(%Ctx{} = ctx, step_name, fun, opts \\ []) when is_function(fun, 0) do
     Runner.step(ctx, step_name, fun, opts)
   end
@@ -347,6 +391,7 @@ defmodule Capstan do
   Wait for a signal. Returns the payload, or `{:error, :timeout}` after
   `:timeout` seconds. Parks the job (no process held) until signalled.
   """
+  @spec await(Ctx.t(), String.t() | atom(), keyword()) :: map() | {:error, :timeout}
   def await(%Ctx{} = ctx, signal_name, opts \\ []) do
     Runner.await(ctx, signal_name, opts)
   end
@@ -355,24 +400,29 @@ defmodule Capstan do
   Durably sleep: parks the job (freeing its slot) and resumes after the
   target. The wake time is memoized under `name`, so replays skip past it.
   """
+  @spec sleep(Ctx.t(), String.t() | atom(), non_neg_integer()) :: :ok
   def sleep(%Ctx{} = ctx, name, seconds), do: Runner.sleep(ctx, name, seconds)
 
   @doc "Read the latest steering payload, or nil."
+  @spec steering(Ctx.t()) :: map() | nil
   def steering(%Ctx{} = ctx), do: Runner.steering(ctx)
 
   @doc """
   Spawn a child job from inside a running job. Memoized under `name`, so a
   crash after spawning cannot duplicate the child. Returns the child job id.
   """
+  @spec spawn(Ctx.t(), String.t() | atom(), buildable()) :: integer()
   def spawn(%Ctx{} = ctx, name, buildable), do: Runner.spawn_child(ctx, name, buildable)
 
   @doc "Spawn many children as one memoized step. Returns their ids in order."
+  @spec spawn_many(Ctx.t(), String.t() | atom(), [buildable()]) :: [integer()]
   def spawn_many(%Ctx{} = ctx, name, buildables), do: Runner.spawn_many(ctx, name, buildables)
 
   @doc """
   Park (at zero cost) until every spawned child reaches a terminal state.
   Returns the children ordered by id.
   """
+  @spec await_children(Ctx.t()) :: [Job.t()]
   def await_children(%Ctx{} = ctx), do: Runner.await_children(ctx)
 
   @doc """
@@ -383,6 +433,7 @@ defmodule Capstan do
         Capstan.map_children(ctx, :chunks, MyApp.Summarize, chunk_inputs)
         |> Enum.map(&Capstan.Job.result/1)
   """
+  @spec map_children(Ctx.t(), String.t() | atom(), module(), [map()], keyword()) :: [Job.t()]
   def map_children(%Ctx{} = ctx, name, worker, inputs, opts \\ []) do
     ids = Runner.spawn_many(ctx, name, Enum.map(inputs, &{Capstan.Worker, worker, &1, opts}))
     by_id = ctx |> Runner.await_children() |> Map.new(&{&1.id, &1})
@@ -395,12 +446,15 @@ defmodule Capstan do
   Subscribers receive `{:capstan_event, job_id, seq, payload}` live;
   `events/3` replays from any offset.
   """
+  @spec emit(Ctx.t(), map()) :: {:ok, integer() | :replayed | :no_registry}
   def emit(%Ctx{} = ctx, payload), do: Runner.emit(ctx, payload)
 
   @doc "Record actual resource usage against the queue's rate resource bucket."
+  @spec debit(Ctx.t(), String.t(), integer()) :: :ok
   def debit(%Ctx{} = ctx, resource, units), do: Runner.debit(ctx, resource, units)
 
   @doc "Subscribe the calling process to a job's event stream."
+  @spec subscribe_events(instance(), integer()) :: :ok
   def subscribe_events(name, job_id) do
     {:ok, _} = Registry.register(run_registry(name), {:events, job_id}, nil)
 
@@ -412,6 +466,7 @@ defmodule Capstan do
   end
 
   @doc "Replay a job's event stream from an offset (0 for everything)."
+  @spec events(instance(), integer(), non_neg_integer()) :: [map()]
   def events(name, job_id, after_seq \\ 0) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
