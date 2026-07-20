@@ -89,7 +89,10 @@ defmodule Capstan do
         {Capstan.CronScheduler, config}
       ] ++ producers
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # Lenient restart budget: transient storage failures must never take the
+    # tree down — the loops themselves also rescue and back off (see Producer,
+    # LeaseKeeper, Sweeper, CronScheduler).
+    Supervisor.init(children, strategy: :one_for_one, max_restarts: 20, max_seconds: 30)
   end
 
   @doc false

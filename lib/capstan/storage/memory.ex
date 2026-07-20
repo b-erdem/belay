@@ -117,6 +117,9 @@ defmodule Capstan.Storage.Memory do
   def prune_jobs(ref, state, now, keep, limit), do: call(ref, {:prune_jobs, state, now, keep, limit})
 
   @impl Capstan.Storage
+  def resettle_parents(ref, now), do: call(ref, {:resettle_parents, now})
+
+  @impl Capstan.Storage
   def prune_signals(ref, now, ttl), do: call(ref, {:prune_signals, now, ttl})
 
   @impl Capstan.Storage
@@ -503,6 +506,28 @@ defmodule Capstan.Storage.Memory do
     {:reply, {:ok, MapSet.size(doomed_ids)}, state}
   end
 
+  def handle_call({:resettle_parents, now}, _from, state) do
+    children_by_parent =
+      state.jobs
+      |> Map.values()
+      |> Enum.filter(& &1.parent_id)
+      |> Enum.group_by(& &1.parent_id)
+
+    resettled =
+      state.jobs
+      |> Map.values()
+      |> Enum.filter(fn job ->
+        job.state == "awaiting" and job.await_name == "$children" and
+          match?([_ | _], Map.get(children_by_parent, job.id, [])) and
+          Enum.all?(children_by_parent[job.id], &(&1.state in @terminal))
+      end)
+      |> Enum.map(fn job ->
+        %{job | state: "ready", ready_at: now, await_scope: nil, await_name: nil}
+      end)
+
+    {:reply, {:ok, resettled}, put_jobs(state, resettled)}
+  end
+
   def handle_call({:prune_signals, now, ttl}, _from, state) do
     cutoff = DateTime.add(now, -ttl, :second)
 
@@ -570,16 +595,12 @@ defmodule Capstan.Storage.Memory do
     {state, released ++ parent_woken, cancelled}
   end
 
+  # Mirror of Postgres: signal the parent on every child completion (see the
+  # race note there); the parent re-verifies and re-parks on spurious wakes.
   defp wake_parent(state, %Job{parent_id: nil}, _now), do: {state, []}
 
   defp wake_parent(state, %Job{parent_id: parent_id}, now) do
-    siblings = state.jobs |> Map.values() |> Enum.filter(&(&1.parent_id == parent_id))
-
-    if Enum.all?(siblings, &(&1.state in @terminal)) do
-      do_put_signal(state, "job:#{parent_id}", "$children", %{"count" => length(siblings)}, now)
-    else
-      {state, []}
-    end
+    do_put_signal(state, "job:#{parent_id}", "$children", %{}, now)
   end
 
   defp do_put_signal(state, scope, name, payload, now) do
@@ -609,7 +630,7 @@ defmodule Capstan.Storage.Memory do
   defp duplicate_unique?(state, %{unique_key: key, unique_mode: mode}) do
     Enum.any?(Map.values(state.jobs), fn job ->
       job.unique_key == key and job.unique_mode == mode and
-        (mode == "window" or job.state in @incomplete)
+        (mode in ["window", "always"] or job.state in @incomplete)
     end)
   end
 

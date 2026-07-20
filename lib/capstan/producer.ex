@@ -56,6 +56,8 @@ defmodule Capstan.Producer do
 
   defp claim(%{paused: true} = state), do: state
 
+  # A storage failure (database restart, network blip) skips this round and
+  # logs — the next poll retries. Claiming must never crash-loop the producer.
   defp claim(%{config: config, spec: spec} = state) do
     demand = spec.local_limit - map_size(state.running)
 
@@ -80,6 +82,16 @@ defmodule Capstan.Producer do
 
       %{state | running: running}
     end
+  rescue
+    error ->
+      require Logger
+
+      Logger.warning(
+        "[capstan] queue #{state.queue} claim skipped (storage unavailable?): " <>
+          Exception.message(error)
+      )
+
+      state
   end
 
   defp schedule_poll(%{config: config} = state) do
@@ -135,6 +147,14 @@ defmodule Capstan.LeaseKeeper do
     end
 
     {:noreply, schedule(config)}
+  rescue
+    # When storage is unreachable we can't tell "lost lease" from "outage";
+    # keep local work running (at-least-once already covers the double-run
+    # risk) and try again next tick.
+    error ->
+      Logger.warning("[capstan] lease renewal skipped: #{Exception.message(error)}")
+
+      {:noreply, schedule(config)}
   end
 
   defp schedule(config) do
@@ -169,6 +189,31 @@ defmodule Capstan.Sweeper do
     backoff_fun = fn job -> DateTime.add(now, Runner.backoff(job), :second) end
 
     {:ok, %{retried: retried, failed: failed}} = storage.reclaim_expired(ref, now, backoff_fun)
+    sweep_rest(config, storage, ref, now, retried, failed)
+
+    {:noreply, schedule(config)}
+  rescue
+    error ->
+      require Logger
+
+      Logger.warning("[capstan] sweep skipped: #{Exception.message(error)}")
+
+      {:noreply, schedule(config)}
+  end
+
+  defp sweep_rest(config, storage, ref, now, retried, failed) do
+    # Backstop for any missed parent wake-up: a parent awaiting $children
+    # whose children are all terminal becomes ready again. Idempotent and
+    # leaderless — worst-case wake latency is one sweep interval.
+    {:ok, resettled} = storage.resettle_parents(ref, now)
+
+    for job <- resettled do
+      require Logger
+
+      Logger.warning("[capstan] resettled parent #{job.id} (missed $children wake)")
+
+      Capstan.poke(config, job.queue)
+    end
 
     # Failed reclaims can cascade-release workflow jobs, so poke on both.
     unless retried == [] and failed == [] do
@@ -184,7 +229,7 @@ defmodule Capstan.Sweeper do
     storage.prune_signals(ref, now, config.signal_ttl)
     storage.prune_rate(ref, DateTime.to_unix(now) - 86_400)
 
-    {:noreply, schedule(config)}
+    :ok
   end
 
   defp schedule(config) do
@@ -237,6 +282,13 @@ defmodule Capstan.CronScheduler do
     end
 
     {:noreply, schedule(config)}
+  rescue
+    error ->
+      require Logger
+
+      Logger.warning("[capstan] cron tick skipped: #{Exception.message(error)}")
+
+      {:noreply, schedule(config)}
   end
 
   defp schedule(config) do

@@ -64,6 +64,31 @@ defmodule Capstan.ChildrenTest do
     assert states == ["failed", "succeeded"]
   end
 
+  test "every child completion signals the parent, not just the last one", %{name: name} do
+    # Count-gated signalling is skippable when the last two children ack in
+    # concurrent transactions (each sees the other as incomplete under READ
+    # COMMITTED) — found by the chaos soak. The contract is now: every child
+    # terminal ack upserts the parent's $children signal; parents re-verify.
+    {:ok, parent} = Capstan.insert(name, Echo.new(%{}, schedule_in: 999))
+
+    {:ok, _c1} =
+      Capstan.insert(name, Capstan.Test.ChildEcho.new(%{"v" => 1}, parent_id: parent.id))
+
+    {:ok, _c2} =
+      Capstan.insert(name, Capstan.Test.ChildEcho.new(%{"v" => 2}, parent_id: parent.id))
+
+    {mod, ref} = storage(name)
+    conf = config(name)
+    spec = Capstan.Config.queue_spec(conf, :default)
+    now = Capstan.Config.now(conf)
+
+    {:ok, [first_child]} = mod.claim(ref, spec, 1, "n", 30_000, now)
+    {:ok, _} = mod.ack(ref, first_child, {:succeeded, nil}, now)
+
+    # One of two children done — the signal must already be there.
+    assert {:ok, _} = mod.get_signal(ref, ["job:#{parent.id}"], "$children")
+  end
+
   test "batches run their on_complete callback whatever the outcomes", %{name: name} do
     {:ok, batch_id, jobs} =
       Batch.insert(

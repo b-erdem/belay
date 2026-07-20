@@ -26,3 +26,4 @@ capstan-*.tar
 /tmp/
 /tmp/
 doc/
+soak/tmp/

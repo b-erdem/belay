@@ -254,28 +254,42 @@ defmodule Capstan.Runner do
 
   # -- Dynamic children ---------------------------------------------------------
 
-  # Spawning is memoized as a step, so a crash-and-retry after spawning cannot
-  # duplicate children.
-  def spawn_child(%Ctx{} = ctx, name, {Capstan.Worker, worker, input, opts}) do
-    step(ctx, "$spawn:#{name}", fn ->
-      {:ok, job} =
-        Capstan.insert(
-          ctx.capstan,
-          {Capstan.Worker, worker, input, Keyword.put(opts, :parent_id, ctx.job.id)}
-        )
+  # Spawning is idempotent twice over: the memoizing step skips it entirely on
+  # replay, and each child carries an always-scoped unique key derived from
+  # (parent, spawn name, index) — so even a crash *between* inserting children
+  # and recording the step cannot duplicate them. The id list is rebuilt from
+  # the unique keys, never trusted from a possibly-partial insert.
+  def spawn_child(%Ctx{} = ctx, name, buildable) do
+    [id] = spawn_many(ctx, name, [buildable])
 
-      job.id
-    end, [])
+    id
   end
 
-  def spawn_many(%Ctx{} = ctx, name, buildables) do
+  def spawn_many(%Ctx{job: parent, config: config} = ctx, name, buildables) do
     step(ctx, "$spawn:#{name}", fn ->
-      buildables
-      |> Enum.map(fn {Capstan.Worker, worker, input, opts} ->
-        {Capstan.Worker, worker, input, Keyword.put(opts, :parent_id, ctx.job.id)}
+      keyed =
+        buildables
+        |> Enum.with_index()
+        |> Enum.map(fn {{Capstan.Worker, worker, input, opts}, index} ->
+          key = "$spawn:#{parent.id}:#{name}:#{index}"
+
+          opts =
+            opts
+            |> Keyword.put(:parent_id, parent.id)
+            |> Keyword.put(:unique, key: key, scope: :always)
+
+          {key, {Capstan.Worker, worker, input, opts}}
+        end)
+
+      _inserted = Capstan.insert_all(ctx.capstan, Enum.map(keyed, &elem(&1, 1)))
+
+      {storage, ref} = config.storage_ref
+
+      Enum.map(keyed, fn {key, _buildable} ->
+        {:ok, child} = storage.get_by_unique_key(ref, key)
+
+        child.id
       end)
-      |> then(&Capstan.insert_all(ctx.capstan, &1))
-      |> Enum.map(& &1.id)
     end, [])
   end
 

@@ -344,15 +344,24 @@ defmodule Capstan.Storage.Postgres do
   defp apply_and_settle(conn, job, outcome, now, fence: fence?) do
     updated = Logic.apply_outcome(%{job | cancel_requested: false}, outcome, now)
 
-    # Close the await race: park-and-wake atomically when the signal exists.
+    # Close the await race: the scope advisory lock serializes parking against
+    # signal delivery (which takes the same lock), so either the signal lands
+    # first and this check flips the job to ready, or the park commits first
+    # and the delivery's wake UPDATE finds it awaiting. No lost wake-ups.
     updated =
-      with {:await, scope, name, _deadline} <- outcome,
-           %{rows: [_ | _]} <-
-             q!(conn, "SELECT 1 FROM capstan_signals WHERE scope = $1 AND name = $2", [
+      with {:await, scope, name, _deadline} <- outcome do
+        q!(conn, "SELECT pg_advisory_xact_lock(hashtext($1))", ["capstan_sig:" <> scope])
+
+        case q!(conn, "SELECT 1 FROM capstan_signals WHERE scope = $1 AND name = $2", [
                scope,
                name
              ]) do
-        %{updated | state: "ready", ready_at: now, await_scope: nil, await_name: nil}
+          %{rows: [_ | _]} ->
+            %{updated | state: "ready", ready_at: now, await_scope: nil, await_name: nil}
+
+          _ ->
+            updated
+        end
       else
         _ -> updated
       end
@@ -443,23 +452,17 @@ defmodule Capstan.Storage.Postgres do
     decode_jobs(rows, columns)
   end
 
-  # When the last child of a parent lands, deliver the `$children` signal —
-  # waking the parent if it's already parked on it.
+  # Signal the parent on EVERY child completion — never on a sibling count.
+  # Under READ COMMITTED, the last two children acking concurrently each see
+  # the other as incomplete, so a count-gated signal can be skipped by both
+  # (found by the chaos soak). Unconditional signalling is race-free: the
+  # parent re-verifies its children on every wake and re-parks if needed,
+  # and a wake UPDATE racing a concurrently-parking parent blocks on the row
+  # lock and re-evaluates, so it cannot miss.
   defp notify_parent(_conn, %Job{parent_id: nil}, _now), do: []
 
   defp notify_parent(conn, %Job{parent_id: parent_id}, now) do
-    %{rows: [[incomplete]]} =
-      q!(
-        conn,
-        "SELECT count(*) FROM capstan_jobs WHERE parent_id = $1 AND state != ALL($2)",
-        [parent_id, @terminal]
-      )
-
-    if incomplete == 0 do
-      do_put_signal(conn, "job:#{parent_id}", "$children", %{}, now)
-    else
-      []
-    end
+    do_put_signal(conn, "job:#{parent_id}", "$children", %{}, now)
   end
 
   # -- Reads & control ----------------------------------------------------------
@@ -722,6 +725,9 @@ defmodule Capstan.Storage.Postgres do
   end
 
   defp do_put_signal(conn, scope, name, payload, now) do
+    # Serialize against concurrently-parking awaiters (see apply_and_settle).
+    q!(conn, "SELECT pg_advisory_xact_lock(hashtext($1))", ["capstan_sig:" <> scope])
+
     q!(
       conn,
       """
@@ -786,6 +792,28 @@ defmodule Capstan.Storage.Postgres do
 
       length(ids)
     end)
+  end
+
+  @impl Capstan.Storage
+  def resettle_parents(ref, now) do
+    %{rows: rows, columns: columns} =
+      q!(
+        ref,
+        """
+        UPDATE capstan_jobs p
+        SET state = 'ready', ready_at = $1, await_scope = NULL, await_name = NULL
+        WHERE p.state = 'awaiting' AND p.await_name = '$children'
+          AND EXISTS (SELECT 1 FROM capstan_jobs c WHERE c.parent_id = p.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM capstan_jobs c
+            WHERE c.parent_id = p.id AND c.state != ALL($2)
+          )
+        RETURNING *
+        """,
+        [now, @terminal]
+      )
+
+    {:ok, decode_jobs(rows, columns)}
   end
 
   @impl Capstan.Storage
@@ -903,7 +931,7 @@ defmodule Capstan.Storage.Postgres do
          AND state IN ('ready', 'running', 'awaiting', 'held', 'paused');
      CREATE UNIQUE INDEX IF NOT EXISTS capstan_jobs_unique_window_idx
        ON capstan_jobs (unique_key)
-       WHERE unique_key IS NOT NULL AND unique_mode = 'window';
+       WHERE unique_key IS NOT NULL AND unique_mode IN ('window', 'always');
      CREATE TABLE IF NOT EXISTS capstan_steps (
        job_id bigint NOT NULL,
        seq int NOT NULL,

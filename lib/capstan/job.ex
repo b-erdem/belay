@@ -120,18 +120,23 @@ defmodule Capstan.Job do
 
   # `unique: "key"` holds while a job with the key is incomplete;
   # `unique: [key: k, within: seconds]` dedupes per fixed time window
-  # regardless of outcome (the window bucket becomes part of the key).
+  # regardless of outcome (the window bucket becomes part of the key);
+  # `unique: [key: k, scope: :always]` dedupes forever regardless of outcome
+  # (used internally to make child-spawning idempotent).
   defp unique_fields(nil, _now), do: {nil, nil}
   defp unique_fields(key, _now) when is_binary(key), do: {key, "incomplete"}
 
   defp unique_fields(opts, now) when is_list(opts) do
     key = Keyword.fetch!(opts, :key)
 
-    case Keyword.get(opts, :within) do
-      nil ->
+    case {Keyword.get(opts, :within), Keyword.get(opts, :scope)} do
+      {nil, :always} ->
+        {key, "always"}
+
+      {nil, _} ->
         {key, "incomplete"}
 
-      seconds when is_integer(seconds) and seconds > 0 ->
+      {seconds, _} when is_integer(seconds) and seconds > 0 ->
         bucket = now |> DateTime.to_unix() |> div(seconds)
 
         {"#{key}@#{bucket}", "window"}

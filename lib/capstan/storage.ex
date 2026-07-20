@@ -60,6 +60,7 @@ defmodule Capstan.Storage do
   @callback retry(ref, integer(), now) :: {:ok, Job.t()} | {:error, :not_retryable | :not_found}
   @callback prune_jobs(ref, state :: String.t(), now, keep_seconds :: integer(), limit :: pos_integer()) ::
               {:ok, non_neg_integer()}
+  @callback resettle_parents(ref, now) :: {:ok, [Job.t()]}
   @callback prune_signals(ref, now, ttl_seconds :: integer()) :: :ok
   @callback debit_rate(ref, bucket :: String.t(), period :: pos_integer(), amount :: integer(), now) :: :ok
   @callback prune_rate(ref, before_unix :: integer()) :: :ok

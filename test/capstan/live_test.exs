@@ -69,6 +69,24 @@ defmodule Capstan.LiveTest do
     assert Events.peak_gauge() in 1..2
   end
 
+  test "fan-out parents under live concurrency all complete (wake-race guard)" do
+    # Regression stress for the parent-wake races the chaos soak surfaced:
+    # many parents whose children finish while the parent is deciding to park.
+    %{name: name} = live!(poll_interval: 30, sweep_interval: 100)
+
+    parents =
+      for i <- 1..25 do
+        {:ok, parent} =
+          Capstan.insert(name, Capstan.Test.FanOut.new(%{"values" => [i, i + 1, i + 2]}))
+
+        {parent.id, [i * 2, i * 2 + 2, i * 2 + 4]}
+      end
+
+    for {id, expected} <- parents do
+      assert {:ok, ^expected} = Capstan.await_result(name, id, 10_000)
+    end
+  end
+
   test "cron fires exactly once per slot across repeated ticks" do
     %{name: _name} =
       live!(

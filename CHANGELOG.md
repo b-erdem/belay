@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.0-rc.2 — 2026-07-20
+
+Hardening release driven by the chaos soak harness (`soak/`), which runs a
+mixed workload across multiple worker OS processes under `kill -9` and full
+Postgres restarts, then verifies thirteen invariants. The passing report
+lives in `soak/REPORT.md`.
+
+### Fixed
+- **Parent wake-up races in dynamic children.** Under READ COMMITTED, the
+  last two children acking concurrently could each see the other as
+  incomplete and both skip the parent's `$children` signal, parking the
+  parent forever. Fixed in layers: children now signal unconditionally on
+  every terminal ack; signal delivery and awaiting-parking serialize on a
+  per-scope advisory lock; and the sweeper re-readies any parent awaiting
+  `$children` whose children are all terminal — so even an unknown residual
+  ordering degrades to a sweep-interval delay, loudly logged, never a stuck
+  job.
+- **Database-outage resilience.** Producers, the lease keeper, the sweeper,
+  and the cron scheduler now rescue storage failures and skip the cycle with
+  a warning instead of crash-looping the supervision tree; restart budgets
+  are lenient. A full Postgres restart mid-load is survived with claim
+  rounds skipped and no losses.
+- **Spawn idempotency across the insert/journal gap.** Children carry
+  always-scoped unique keys derived from (parent, spawn name, index), and
+  the id list is rebuilt from those keys — a crash between inserting
+  children and recording the spawn step can no longer duplicate them.
+
+### Added
+- `soak/` chaos harness (workers, driver with ledgered expectations,
+  kill/restart orchestration, invariant verification, report generation).
+- Third uniqueness scope: `unique: [key: k, scope: :always]`.
+- Sub-second worker timeouts: `timeout: {n, :millisecond}`.
+
 ## 1.0.0-rc.1 — 2026-07-20
 
 First release candidate. Everything below ships open, Apache-2.0, with no
