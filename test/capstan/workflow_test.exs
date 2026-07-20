@@ -1,16 +1,16 @@
 defmodule Capstan.WorkflowTest do
   use Capstan.Test.Case, async: false
 
-  alias Capstan.Test.{Events, Tagged}
+  alias Capstan.Test.Tagged
   alias Capstan.Workflow
 
   setup do
-    Events.clear()
-
-    {:ok, name: start_oban!()}
+    {:ok, start_capstan!()}
   end
 
-  defp tagged(tag, extra \\ %{}), do: Tagged.new(Map.merge(%{"tag" => tag}, extra))
+  defp tagged(tag, extra \\ %{}, opts \\ []) do
+    Tagged.new(Map.merge(%{"tag" => tag}, extra), opts)
+  end
 
   test "linear dependencies run in order", %{name: name} do
     {:ok, jobs} =
@@ -20,18 +20,16 @@ defmodule Capstan.WorkflowTest do
       |> Workflow.add(:c, tagged("c"), deps: [:b])
       |> Workflow.insert(name)
 
-    assert jobs["a"].state == "available"
-    assert jobs["b"].state == "suspended"
-    assert jobs["c"].state == "suspended"
+    assert jobs["a"].state == "ready"
+    assert jobs["b"].state == "held"
+    assert jobs["c"].state == "held"
 
-    drain!(name, :default)
-
+    assert %{succeeded: 3} = Testing.drain(name, :default)
     assert Events.all() == [{:ran, "a"}, {:ran, "b"}, {:ran, "c"}]
-    assert Enum.all?(all_jobs(), &(&1.state == "completed"))
   end
 
-  test "diamond: join waits for all parents", %{name: name} do
-    {:ok, _} =
+  test "diamond joins wait for all parents", %{name: name} do
+    {:ok, jobs} =
       Workflow.new()
       |> Workflow.add(:a, tagged("a"))
       |> Workflow.add(:b, tagged("b"), deps: [:a])
@@ -39,54 +37,72 @@ defmodule Capstan.WorkflowTest do
       |> Workflow.add(:d, tagged("d"), deps: [:b, :c])
       |> Workflow.insert(name)
 
-    drain!(name, :default)
+    assert %{succeeded: 4} = Testing.drain(name, :default)
 
     events = Events.all()
 
-    assert length(events) == 4
     assert List.first(events) == {:ran, "a"}
     assert List.last(events) == {:ran, "d"}
-    assert Enum.all?(all_jobs(), &(&1.state == "completed"))
+
+    wf_id = jobs["a"].workflow_id
+    assert %{done?: true, state_counts: %{"succeeded" => 4}} = Workflow.status(name, wf_id)
   end
 
-  test "failed upstream cancels dependents transitively", %{name: name} do
-    {:ok, wf_jobs} =
+  test "failed upstreams cancel dependents transitively", %{name: name} do
+    {:ok, jobs} =
       Workflow.new()
-      |> Workflow.add(:a, Tagged.new(%{"tag" => "a", "fail" => true}, max_attempts: 1))
+      |> Workflow.add(:a, tagged("a", %{"fail" => true}, max_attempts: 1))
       |> Workflow.add(:b, tagged("b"), deps: [:a])
       |> Workflow.add(:c, tagged("c"), deps: [:b])
       |> Workflow.insert(name)
 
-    drain!(name, :default)
+    assert %{failed: 1} = Testing.drain(name, :default)
 
-    states = Map.new(all_jobs(), &{&1.meta["workflow_name"], &1.state})
+    states =
+      name
+      |> Workflow.jobs(jobs["a"].workflow_id)
+      |> Map.new(&{&1.wf_name, &1.state})
 
-    assert states == %{"a" => "discarded", "b" => "cancelled", "c" => "cancelled"}
+    assert states == %{"a" => "failed", "b" => "cancelled", "c" => "cancelled"}
     assert Events.all() == [{:ran, "a"}]
 
-    status = Workflow.status(name, wf_jobs["a"].meta["workflow_id"])
-    assert status.done?
+    assert {:error, {:job, :cancelled}} = Capstan.await_result(name, jobs["c"].id, 100)
   end
 
-  test "ignore_discarded releases dependents despite failure", %{name: name} do
-    {:ok, _} =
+  test "ignore: [:failed] treats failure as satisfied", %{name: name} do
+    {:ok, _jobs} =
       Workflow.new()
-      |> Workflow.add(:a, Tagged.new(%{"tag" => "a", "fail" => true}, max_attempts: 1))
-      |> Workflow.add(:b, tagged("b"), deps: [:a], ignore_discarded: true)
+      |> Workflow.add(:a, tagged("a", %{"fail" => true}, max_attempts: 1))
+      |> Workflow.add(:b, tagged("b"), deps: [:a], ignore: [:failed])
       |> Workflow.insert(name)
 
-    drain!(name, :default)
+    counts = Testing.drain(name, :default)
 
-    states = Map.new(all_jobs(), &{&1.meta["workflow_name"], &1.state})
-
-    assert states == %{"a" => "discarded", "b" => "completed"}
+    assert counts == %{failed: 1, succeeded: 1}
     assert {:ran, "b"} in Events.all()
+  end
+
+  test "cancelling a held workflow job cascades to its dependents", %{name: name} do
+    {:ok, jobs} =
+      Workflow.new()
+      |> Workflow.add(:a, tagged("a", %{}, schedule_in: 300))
+      |> Workflow.add(:b, tagged("b"), deps: [:a])
+      |> Workflow.add(:c, tagged("c"), deps: [:b])
+      |> Workflow.insert(name)
+
+    {:ok, :cancelled} = Capstan.cancel(name, jobs["a"].id)
+
+    states =
+      name
+      |> Workflow.jobs(jobs["a"].workflow_id)
+      |> Map.new(&{&1.wf_name, &1.state})
+
+    assert states == %{"a" => "cancelled", "b" => "cancelled", "c" => "cancelled"}
   end
 
   test "unknown deps raise at build time" do
     assert_raise ArgumentError, ~r/unknown workflow deps/, fn ->
-      Workflow.new()
-      |> Workflow.add(:b, tagged("b"), deps: [:missing])
+      Workflow.new() |> Workflow.add(:b, tagged("b"), deps: [:missing])
     end
   end
 end

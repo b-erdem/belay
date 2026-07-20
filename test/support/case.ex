@@ -3,70 +3,88 @@ defmodule Capstan.Test.Case do
 
   use ExUnit.CaseTemplate
 
-  alias Capstan.Test.Repo
-
   using do
     quote do
       import Capstan.Test.Case
 
-      alias Capstan.Test.Repo
+      alias Capstan.Clock.Sim
+      alias Capstan.Test.Events
+      alias Capstan.Testing
     end
   end
 
   setup do
-    for table <- ~w(oban_jobs capstan_steps capstan_signals capstan_rate capstan_crons) do
-      Repo.query!("DELETE FROM #{table}")
-    end
+    Capstan.Test.Events.clear()
 
     :ok
   end
 
   @doc """
-  Start an isolated Oban instance wired to the Capstan engine.
+  Start an isolated Capstan instance. Returns `%{name:, clock:}` where clock
+  is a SimClock pid (unless `sim_clock: false`).
 
-  Returns the instance name. Queues default to none; pass e.g. `queues: [default: 5]`.
+  Queues default to a single manual `:default` queue so tests drive execution
+  via `Capstan.Testing.drain/2`; pass explicit `queues:` for live producers.
   """
-  def start_oban!(opts \\ []) do
-    name = Module.concat(ObanTest, "T#{System.unique_integer([:positive])}")
+  def start_capstan!(opts \\ []) do
+    name = Module.concat(CapstanTest, "T#{System.unique_integer([:positive])}")
 
-    opts =
-      Keyword.merge(
-        [
-          name: name,
-          repo: Repo,
-          engine: Capstan.Engine,
-          # Oban only auto-disables the prefix for its own Lite engine, so a
-          # custom engine on SQLite must disable it explicitly.
-          prefix: false,
-          notifier: Oban.Notifiers.Isolated,
-          peer: false,
-          plugins: false,
-          queues: false,
-          stage_interval: 50,
-          shutdown_grace_period: 250
-        ],
-        opts
-      )
+    {clock, clock_pid} =
+      if Keyword.get(opts, :sim_clock, true) do
+        {:ok, pid} = Capstan.Clock.Sim.start_link(~U[2026-01-05 00:00:00.000000Z])
+        {{Capstan.Clock.Sim, pid}, pid}
+      else
+        {Capstan.Clock.System, nil}
+      end
 
-    start_supervised!({Oban, opts})
+    storage =
+      case Application.get_env(:capstan, :test_storage, :memory) do
+        :memory -> [adapter: :memory]
+        :postgres -> [adapter: :postgres, url: Application.fetch_env!(:capstan, :test_pg_url)]
+      end
 
-    name
+    capstan_opts = [
+      name: name,
+      storage: storage,
+      clock: clock,
+      queues: Keyword.get(opts, :queues, default: [limit: 10, manual: true]),
+      crons: Keyword.get(opts, :crons, []),
+      poll_interval: Keyword.get(opts, :poll_interval, 100),
+      lease_ttl: Keyword.get(opts, :lease_ttl, 30_000),
+      sweep_interval: Keyword.get(opts, :sweep_interval, 200),
+      cron_interval: Keyword.get(opts, :cron_interval, 20_000)
+    ]
+
+    ExUnit.Callbacks.start_supervised!({Capstan, capstan_opts})
+
+    if storage[:adapter] == :postgres do
+      Capstan.Storage.Postgres.truncate!(storage_ref(name))
+    end
+
+    %{name: name, clock: clock_pid}
   end
 
-  @doc "Drain a queue synchronously through the configured engine."
-  def drain!(name, queue, opts \\ []) do
-    Oban.drain_queue(name, Keyword.merge([queue: queue, with_recursion: true], opts))
+  def storage_ref(name) do
+    %{storage_ref: {_mod, ref}} = Capstan.Config.fetch!(name)
+    ref
   end
 
-  @doc "Fetch all jobs as a list of maps for assertions."
-  def all_jobs do
-    import Ecto.Query
-
-    Repo.all(from(j in Oban.Job, order_by: j.id))
+  def storage(name) do
+    %{storage_ref: storage_ref} = Capstan.Config.fetch!(name)
+    storage_ref
   end
 
-  @doc "Wait until fun returns truthy or timeout (for async queue tests)."
-  def wait_until(fun, timeout \\ 2_000) do
+  def config(name), do: Capstan.Config.fetch!(name)
+
+  def advance(nil, _seconds), do: raise("test instance started with sim_clock: false")
+  def advance(clock, seconds), do: Capstan.Clock.Sim.advance(clock, seconds)
+
+  def job!(name, id) do
+    {:ok, job} = Capstan.get_job(name, id)
+    job
+  end
+
+  def wait_until(fun, timeout \\ 3_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_wait(fun, deadline)
   end
@@ -75,9 +93,9 @@ defmodule Capstan.Test.Case do
     case fun.() do
       result when result in [nil, false] ->
         if System.monotonic_time(:millisecond) > deadline do
-          flunk("wait_until timed out")
+          ExUnit.Assertions.flunk("wait_until timed out")
         else
-          Process.sleep(25)
+          Process.sleep(20)
           do_wait(fun, deadline)
         end
 

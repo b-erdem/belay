@@ -6,82 +6,89 @@ defmodule Capstan.Test.Events do
   end
 
   def all do
-    :capstan_events
-    |> :ets.tab2list()
-    |> Enum.sort()
-    |> Enum.map(&elem(&1, 1))
+    :capstan_events |> :ets.tab2list() |> Enum.sort() |> Enum.map(&elem(&1, 1))
   end
 
   def count(key), do: Enum.count(all(), &(&1 == key))
 
-  def clear, do: :ets.delete_all_objects(:capstan_events)
+  def clear do
+    :ets.delete_all_objects(:capstan_events)
+    :ets.insert(:capstan_gauge, {:running, 0})
+  end
+
+  def gauge_up do
+    current = :ets.update_counter(:capstan_gauge, :running, 1)
+    record({:gauge, current})
+    current
+  end
+
+  def gauge_down, do: :ets.update_counter(:capstan_gauge, :running, -1)
+
+  def peak_gauge do
+    all()
+    |> Enum.flat_map(fn
+      {:gauge, n} -> [n]
+      _ -> []
+    end)
+    |> Enum.max(fn -> 0 end)
+  end
 end
 
 defmodule Capstan.Test.Echo do
   @moduledoc false
-  use Capstan.Worker, queue: :default, recorded: true, max_attempts: 3
+  use Capstan.Worker, queue: :default, max_attempts: 3
+
+  alias Capstan.Ctx
 
   @impl Capstan.Worker
-  def process(%Oban.Job{args: args}), do: {:ok, args}
+  def run(%Ctx{job: job}), do: {:ok, job.input}
 end
 
-defmodule Capstan.Test.Schema do
+defmodule Capstan.Test.Tagged do
   @moduledoc false
-  use Capstan.Worker,
-    queue: :default,
-    recorded: true,
-    max_attempts: 3,
-    args_schema: [
-      name: [type: :string, required: true],
-      count: [type: :integer, default: 7],
-      mode: [type: {:enum, ["fast", "slow"]}]
-    ]
+  use Capstan.Worker, queue: :default, max_attempts: 3
+
+  alias Capstan.{Ctx, Test.Events}
 
   @impl Capstan.Worker
-  def process(%Oban.Job{args: args}), do: {:ok, args}
+  def run(%Ctx{job: job}) do
+    Events.record({:ran, job.input["tag"]})
+
+    if job.input["fail"], do: {:error, :nope}, else: :ok
+  end
 end
 
-defmodule Capstan.Test.Hooked do
+defmodule Capstan.Test.FailN do
   @moduledoc false
-  use Capstan.Worker, queue: :default, max_attempts: 1
 
-  alias Capstan.Test.Events
+  # Raises while attempt <= input["fail_times"], then succeeds.
+  use Capstan.Worker, queue: :default, max_attempts: 5
+
+  alias Capstan.Ctx
 
   @impl Capstan.Worker
-  def before_process(%Oban.Job{args: %{"veto" => true}}), do: {:cancel, :vetoed}
+  def run(%Ctx{job: job}) do
+    if job.attempt <= (job.input["fail_times"] || 0) do
+      raise "planned failure #{job.attempt}"
+    end
 
-  def before_process(_job) do
-    Events.record(:before)
-    :ok
+    {:ok, %{"attempt" => job.attempt}}
   end
 
   @impl Capstan.Worker
-  def process(_job) do
-    Events.record(:process)
-    :ok
-  end
-
-  @impl Capstan.Worker
-  def after_process(_job, result) do
-    Events.record({:after, elem(result, 0)})
-  rescue
-    _ -> Events.record({:after, :plain})
-  end
+  def backoff(_attempt), do: 5
 end
 
 defmodule Capstan.Test.StepFlaky do
   @moduledoc false
+  use Capstan.Worker, queue: :default, max_attempts: 3
 
-  # Fails after its first step on attempt one; the memoized step must not
-  # re-run on retry.
-  use Capstan.Worker, queue: :default, recorded: true, max_attempts: 3
-
-  alias Capstan.Test.Events
+  alias Capstan.{Ctx, Test.Events}
 
   @impl Capstan.Worker
-  def process(%Oban.Job{} = job) do
+  def run(%Ctx{job: job} = ctx) do
     base =
-      Capstan.step(job, :expensive, fn ->
+      Capstan.step(ctx, :expensive, fn ->
         Events.record(:step_ran)
         41
       end)
@@ -90,67 +97,125 @@ defmodule Capstan.Test.StepFlaky do
 
     {:ok, base + 1}
   end
+
+  @impl Capstan.Worker
+  def backoff(_attempt), do: 5
+end
+
+defmodule Capstan.Test.Budgeted do
+  @moduledoc false
+
+  # Runs input["steps"] steps, each costing input["usd"] dollars and
+  # input["tokens"] tokens.
+  use Capstan.Worker, queue: :default, max_attempts: 1
+
+  alias Capstan.{Ctx, Test.Events}
+
+  @impl Capstan.Worker
+  def run(%Ctx{job: job} = ctx) do
+    for i <- 1..job.input["steps"] do
+      Capstan.step(
+        ctx,
+        "s#{i}",
+        fn ->
+          Events.record({:step, i})
+          i
+        end,
+        cost: [usd: job.input["usd"] || 0, tokens: job.input["tokens"] || 0]
+      )
+    end
+
+    :ok
+  end
 end
 
 defmodule Capstan.Test.Awaiter do
   @moduledoc false
-  use Capstan.Worker, queue: :default, recorded: true, max_attempts: 10
+  use Capstan.Worker, queue: :default, max_attempts: 10
+
+  alias Capstan.Ctx
 
   @impl Capstan.Worker
-  def process(%Oban.Job{} = job) do
-    payload = Capstan.await_signal(job, :approval, resnooze: 300)
+  def run(%Ctx{job: job} = ctx) do
+    opts = if timeout = job.input["timeout"], do: [timeout: timeout], else: []
 
-    {:ok, payload}
+    case Capstan.await(ctx, :approval, opts) do
+      {:error, :timeout} -> {:ok, %{"timeout" => true}}
+      payload -> {:ok, payload}
+    end
   end
 end
 
-defmodule Capstan.Test.Tagged do
+defmodule Capstan.Test.Steered do
+  @moduledoc false
+  use Capstan.Worker, queue: :default, max_attempts: 1
+
+  alias Capstan.Ctx
+
+  @impl Capstan.Worker
+  def run(%Ctx{} = ctx) do
+    Capstan.step(ctx, :one, fn -> 1 end)
+
+    {:ok, %{"steer" => Capstan.steering(ctx)}}
+  end
+end
+
+defmodule Capstan.Test.NapThenDone do
+  @moduledoc false
+  use Capstan.Worker, queue: :default, max_attempts: 5
+
+  alias Capstan.{Ctx, Test.Events}
+
+  @impl Capstan.Worker
+  def run(%Ctx{job: job} = ctx) do
+    Capstan.step(ctx, :first, fn ->
+      Events.record(:first)
+      :ok
+    end)
+
+    Capstan.sleep(ctx, :nap, job.input["seconds"])
+
+    {:ok, %{"woke" => true}}
+  end
+end
+
+defmodule Capstan.Test.StepOnly do
   @moduledoc false
   use Capstan.Worker, queue: :default, max_attempts: 3
 
-  alias Capstan.Test.Events
+  alias Capstan.Ctx
 
   @impl Capstan.Worker
-  def process(%Oban.Job{args: %{"tag" => tag} = args}) do
-    Events.record({:ran, tag})
-
-    if args["fail"], do: {:error, :nope}, else: :ok
+  def run(%Ctx{} = ctx) do
+    {:ok, Capstan.step(ctx, :a, fn -> 1 end)}
   end
 end
 
-defmodule Capstan.Test.FailOnce do
+defmodule Capstan.Test.SlowLive do
   @moduledoc false
-  use Capstan.Worker, queue: :default, max_attempts: 3
+  use Capstan.Worker, queue: :limited, max_attempts: 1
+
+  alias Capstan.{Ctx, Test.Events}
 
   @impl Capstan.Worker
-  def process(%Oban.Job{attempt: 1}), do: raise("first attempt boom")
-  def process(_job), do: :ok
-end
+  def run(%Ctx{}) do
+    Events.gauge_up()
+    Process.sleep(30)
+    Events.gauge_down()
 
-defmodule Capstan.Test.BatchCb do
-  @moduledoc false
-  use Capstan.Batch.Callback, queue: :default, max_attempts: 3
-
-  alias Capstan.Test.Events
-
-  def handle_completed(batch_id, _job) do
-    Events.record({:batch_completed, batch_id})
-    :ok
-  end
-
-  def handle_exhausted(batch_id, _job) do
-    Events.record({:batch_exhausted, batch_id})
     :ok
   end
 end
 
-defmodule Capstan.Test.Sleeper do
+defmodule Capstan.Test.CronJob do
   @moduledoc false
-  use Oban.Worker, queue: :default, max_attempts: 1
+  use Capstan.Worker, queue: :default, max_attempts: 1
 
-  @impl Oban.Worker
-  def perform(_job) do
-    Process.sleep(50)
+  alias Capstan.{Ctx, Test.Events}
+
+  @impl Capstan.Worker
+  def run(%Ctx{}) do
+    Events.record(:cron_ran)
     :ok
   end
 end

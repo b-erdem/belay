@@ -1,96 +1,95 @@
 # Capstan
 
-**An open, agent-native pro toolkit for [Oban](https://github.com/oban-bg/oban).**
-Durable steps, signals, workflows, batches, chains, relayed results, and a smart
-engine with global concurrency and rate limits — on plain Oban tables, fully
-compatible with Oban Web, `Oban.Testing`, and telemetry. Apache-2.0.
+**A standalone, agent-native durable job engine for Elixir.**
+No Oban, no Ecto — Postgrex, Jason, and telemetry only. Postgres in production,
+a deterministic in-memory adapter for tests. Apache-2.0.
 
-Capstan is a clean-room alternative to the commercial job-composition layer,
-designed from public documentation and rethought for agent workloads: its core
-primitive is the **durable step** — retries replay past completed work instead
-of re-buying it.
+Capstan treats the execution journal as the core: jobs are made of **memoized
+steps with cost accounting**, so a retry replays past completed work instead of
+re-buying it, and a budget cap can kill a runaway agent mid-flight.
 
 ```elixir
 defmodule MyApp.ResearchAgent do
-  use Capstan.Worker, queue: :ai, max_attempts: 10, recorded: true
+  use Capstan.Worker, queue: :ai, max_attempts: 10
 
   @impl Capstan.Worker
-  def process(job) do
-    # Each step runs at most once per job — a crash after :summarize
-    # never re-pays for :transcribe.
-    text    = Capstan.step(job, :transcribe, fn -> transcribe!(job.args) end)
-    summary = Capstan.step(job, :summarize, fn -> llm!(text) end)
+  def run(ctx) do
+    text = Capstan.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
 
-    # Park until a human approves;
-    # Capstan.signal_job(job_id, :approval, %{...}) resumes it instantly.
-    %{"approved" => true} = Capstan.await_signal(job, :approval)
+    summary =
+      Capstan.step(ctx, :summarize, fn -> llm!(text) end,
+        cost: [usd: 0.02, tokens: 1200])
 
-    Capstan.step(job, :publish, fn -> publish!(summary) end)
-    {:ok, summary}
+    # Park at zero cost until a human decides; signal_job/4 resumes instantly.
+    case Capstan.await(ctx, :approval, timeout: 86_400) do
+      %{"approved" => true} -> {:ok, summary}
+      _ -> {:cancel, :rejected}
+    end
   end
 end
+
+# Enqueue with a hard spend cap: the engine fails the job at the boundary
+# where accumulated step costs cross it.
+Capstan.insert(MyCapstan, MyApp.ResearchAgent.new(%{"url" => url}, budget: [usd: 1.0]))
 ```
 
-## Install
+## Start an instance
 
 ```elixir
-# mix.exs
-{:capstan, path: "../capstan"}   # not yet on hex
+children = [
+  {Capstan,
+   name: MyCapstan,
+   storage: [adapter: :postgres, url: "postgres://localhost/my_app"],
+   queues: [
+     default: 10,
+     ai: [limit: 5, global_limit: 2, rate: [allowed: 60, period: 60]],
+     tenants: [limit: 10, global_limit: 1, partition: {:input, "tenant"}]
+   ],
+   crons: [
+     [name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]
+   ]}
+]
 ```
 
-Run migrations after Oban's:
+Create the schema once: `Capstan.Storage.Postgres.migrate!(url)`.
 
-```elixir
-defmodule MyApp.Repo.Migrations.AddCapstan do
-  use Ecto.Migration
-  def up, do: Capstan.Migration.up()
-  def down, do: Capstan.Migration.down()
-end
-```
+## What's in the box
 
-Configure the engine (on SQLite also set `prefix: false`):
-
-```elixir
-config :my_app, Oban,
-  engine: Capstan.Engine,
-  repo: MyApp.Repo,
-  queues: [
-    mailers: 20,
-    ai: [limit: 10, global_limit: 4, rate_limit: [allowed: 60, period: 60]],
-    tenants: [limit: 10, global_limit: 2, partition: {:args, "tenant_id"}]
-  ]
-```
-
-## Features
-
-| Module | What it gives you |
+| Capability | How |
 |---|---|
-| `Capstan.Engine` | cluster-wide `global_limit`, sliding-window `rate_limit`, per-key `partition` fairness — accounting derived from indexed queries, no hidden state |
-| `Capstan.Steps` | `step/3` memoized durable steps; `await_signal/3` + `signal/4` human-in-the-loop |
-| `Capstan.Worker` | `args_schema` validation (invalid args cancel, not retry), hooks, recorded results |
-| `Capstan.Workflow` | DAG dependencies held in the `suspended` state, cascade or ignore failure policies |
-| `Capstan.Batch` | milestone callback jobs (`handle_completed`, `handle_exhausted`), fired exactly once |
-| `Capstan.Chain` | strict per-key FIFO with `continue`/`halt` failure policies |
-| `Capstan.Relay` | insert a job, `await/2` its recorded result across nodes |
+| Durable steps | `Capstan.step/4` — memoized per job, term-native values, cost columns |
+| Budgets with teeth | `budget: [usd:, tokens:]` — job fails with `:budget_exceeded` at the cap |
+| Human-in-the-loop | `Capstan.await/3` parks the job; `signal_job/4` wakes it with a payload |
+| Steering | `Capstan.steer/3` → `Capstan.steering/1` reads guidance at step boundaries |
+| Durable sleep | `Capstan.sleep/3` — memoized wake target, survives restarts |
+| Workflows | `Capstan.Workflow` — DAG deps, transactional release, cascade or `ignore:` |
+| Cluster limits | per-queue `global_limit`, sliding-window `rate`, per-key `partition` fairness |
+| Leases, not heuristics | crashed workers reclaimed after the lease TTL (~30s), acks fenced by attempt |
+| Leaderless cron | any node fires; a unique `(cron_name, cron_slot)` index dedupes |
+| Results | `Capstan.await_result/3` — RPC ergonomics over background work |
+| Testing | `Capstan.Testing.drain/2` + `Capstan.Clock.Sim` — time-travel, never sleep |
 
-Everything advances through engine transition interception — no polling
-coordinator processes.
+Design decisions and their rationale — first-class columns over meta blobs, an
+8-state agent-shaped lifecycle with no stager, poll-first dispatch with no
+LISTEN/NOTIFY dependency, the storage behaviour with a deterministic reference
+adapter — are documented in [DESIGN.md](DESIGN.md). The market research and
+competitive teardown that motivated all of it are in [PLAN.md](PLAN.md) and
+[docs/research/](docs/research/2026-07-20-research-digest.md).
 
 ## Status
 
-v0. 34 tests green on SQLite (Lite engine) and Postgres 16 (Basic engine):
+v0.2 (standalone rewrite). 42 tests — engine core, steps/budgets/steering,
+signals/await, workflows, limits, leases/fencing, leaderless cron, live
+producers, and 300-seed workflow-settlement invariants — green on both storage
+adapters:
 
 ```
-mix test                # SQLite
-CAPSTAN_PG=1 mix test   # Postgres (docker: port 55433; force recompile on adapter switch)
+mix test                # Memory (deterministic, SimClock time-travel)
+CAPSTAN_PG=1 mix test   # Postgres 16 (docker, port 55433)
 ```
 
-See [PLAN.md](PLAN.md) for the research-backed design rationale, honest
-limitations, the parity table against Oban Pro, and the roadmap
-(token-budget flow control, cost governance, MCP operability, workflow
-visualization).
-
-If you need battle-tested versions of these features in production today, buy
-[Oban Pro](https://oban.pro) — it is excellent software and funds Oban itself.
-Capstan exists for the layer Pro doesn't sell: step-granular durable execution
-and agent-era operability, open.
+Not yet built (deliberately, see DESIGN.md §8): dynamic spawn/graft, durable
+streams, time-travel replay tooling, MCP server, dashboard, SQLite adapter,
+Ecto bridge for transactional enqueue, dynamic queue/cron tables, batches.
+This engine is days old — treat it as a foundation, not yet a production
+system.

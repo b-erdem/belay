@@ -1,71 +1,70 @@
 defmodule Capstan.StepsTest do
   use Capstan.Test.Case, async: false
 
-  alias Capstan.Test.{Awaiter, Events, StepFlaky}
+  alias Capstan.Test.{Budgeted, Steered, StepFlaky}
 
   setup do
-    Events.clear()
-
-    {:ok, name: start_oban!()}
+    {:ok, start_capstan!()}
   end
 
-  test "steps are memoized across retries", %{name: name} do
-    {:ok, _} = Oban.insert(name, StepFlaky.new(%{}))
+  test "steps are memoized across retries", %{name: name, clock: clock} do
+    {:ok, job} = Capstan.insert(name, StepFlaky.new(%{}))
 
-    drain!(name, :default, with_scheduled: true)
+    assert %{ready: 1} = Testing.drain(name, :default)
 
-    [job] = all_jobs()
+    advance(clock, 6)
 
-    assert job.state == "completed"
-    assert job.attempt == 2
+    assert %{succeeded: 1} = Testing.drain(name, :default)
     assert Events.count(:step_ran) == 1
-    assert {:ok, 42} = Capstan.Worker.fetch_recorded(job)
+    assert {:ok, 42} = Capstan.await_result(name, job.id, 100)
+    assert job!(name, job.id).attempt == 2
   end
 
-  test "await_signal parks the job, signal wakes and delivers payload", %{name: name} do
-    {:ok, %{id: id}} = Oban.insert(name, Awaiter.new(%{}))
+  test "steps and costs are inspectable", %{name: name} do
+    {:ok, job} = Capstan.insert(name, Budgeted.new(%{"steps" => 2, "usd" => 0.10}))
 
-    drain!(name, :default)
+    Testing.drain(name, :default)
 
-    [job] = all_jobs()
+    {:ok, steps} = Capstan.steps(name, job.id)
 
-    assert job.state == "scheduled"
-    assert job.meta["awaiting_scope"] == "job:#{id}"
-    assert job.meta["awaiting_name"] == "approval"
-
-    Capstan.Steps.signal(name, "job:#{id}", :approval, %{"approved" => true})
-
-    [job] = all_jobs()
-    assert job.state == "available"
-
-    drain!(name, :default)
-
-    [job] = all_jobs()
-    assert job.state == "completed"
-    assert {:ok, %{"approved" => true}} = Capstan.Worker.fetch_recorded(job)
+    assert [%{name: "s1", usd_micros: 100_000}, %{name: "s2", usd_micros: 100_000}] =
+             Enum.map(steps, &Map.take(&1, [:name, :usd_micros]))
   end
 
-  test "a signal delivered before the job runs is picked up immediately", %{name: name} do
-    {:ok, %{id: id}} = Oban.insert(name, Awaiter.new(%{}))
+  test "usd budget kills the job at the cap", %{name: name} do
+    {:ok, job} =
+      Capstan.insert(name, Budgeted.new(%{"steps" => 5, "usd" => 0.30}, budget: [usd: 0.50]))
 
-    Capstan.Steps.signal(name, "job:#{id}", :approval, %{"pre" => 1})
+    assert %{failed: 1} = Testing.drain(name, :default)
 
-    drain!(name, :default)
+    job = job!(name, job.id)
 
-    [job] = all_jobs()
-    assert job.state == "completed"
-    assert {:ok, %{"pre" => 1}} = Capstan.Worker.fetch_recorded(job)
+    assert job.state == "failed"
+    assert [%{"error" => "budget_exceeded"} | _] = Enum.reverse(job.errors)
+    assert job.spent_usd_micros == 600_000
+    assert Events.count({:step, 2}) == 1
+    assert Events.count({:step, 3}) == 0
   end
 
-  test "clear_signal makes await block again", %{name: name} do
-    {:ok, %{id: id}} = Oban.insert(name, Awaiter.new(%{}))
+  test "token budget kills the job at the cap", %{name: name} do
+    {:ok, job} =
+      Capstan.insert(
+        name,
+        Budgeted.new(%{"steps" => 5, "tokens" => 60}, budget: [tokens: 100])
+      )
 
-    Capstan.Steps.signal(name, "job:#{id}", :approval, %{})
-    Capstan.Steps.clear_signal(name, "job:#{id}", :approval)
+    assert %{failed: 1} = Testing.drain(name, :default)
+    assert job!(name, job.id).spent_tokens == 120
+  end
 
-    drain!(name, :default)
+  test "steering payloads reach the running job", %{name: name} do
+    {:ok, job} = Capstan.insert(name, Steered.new(%{}))
 
-    [job] = all_jobs()
-    assert job.state == "scheduled"
+    Capstan.steer(name, job.id, %{"instruction" => "wrap it up"})
+
+    assert %{succeeded: 1} = Testing.drain(name, :default)
+
+    assert {:ok, %{"steer" => %{"instruction" => "wrap it up"}}} =
+             Capstan.await_result(name, job.id, 100)
   end
 end

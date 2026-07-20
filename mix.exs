@@ -1,7 +1,7 @@
 defmodule Capstan.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/bariserdem/capstan"
 
   def project do
@@ -13,14 +13,16 @@ defmodule Capstan.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "Capstan",
-      description: "Agent-native pro toolkit for Oban: durable steps, signals, workflows, batches, chains, relay, and a smart engine with global and rate limits.",
+      description:
+        "A standalone, agent-native durable job engine for Elixir on Postgres: " <>
+          "memoized steps with cost budgets, signals, workflows, leases, and leaderless scheduling.",
       package: package(),
       docs: [main: "Capstan", source_url: @source_url]
     ]
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger, :crypto]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -28,11 +30,9 @@ defmodule Capstan.MixProject do
 
   defp deps do
     [
-      {:oban, "~> 2.19"},
-      {:ecto_sql, "~> 3.10"},
+      {:postgrex, "~> 0.17"},
       {:jason, "~> 1.4"},
-      {:ecto_sqlite3, "~> 0.16", only: [:dev, :test]},
-      {:postgrex, "~> 0.17", only: [:dev, :test]},
+      {:telemetry, "~> 1.2"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end
