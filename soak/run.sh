@@ -1,13 +1,17 @@
 #!/bin/bash
 # Accelerated chaos soak: 3 worker OS processes, kill -9 every ~4s, periodic
 # full Postgres restarts, then invariant verification (soak/driver.exs).
-# Usage: soak/run.sh   (env: SOAK_CHAOS_SECS, SOAK_WAVES, SOAK_WAVE_MS)
+# Usage: soak/run.sh
+# Env: SOAK_CHAOS_SECS, SOAK_WAVES, SOAK_WAVE_MS, SOAK_DB_RESTART_EVERY_SECS
+#      (0 = default: restarts at the 1/3 and 2/3 marks; >0 = every N seconds,
+#      for long endurance runs)
 set -u
 cd "$(dirname "$0")/.."
 
 export SOAK_URL="${SOAK_URL:-postgres://postgres:capstan@localhost:55433/capstan_soak}"
 DBCONT="${SOAK_DB_CONTAINER:-capstan-postgres}"
 CHAOS_SECS="${SOAK_CHAOS_SECS:-150}"
+DB_EVERY="${SOAK_DB_RESTART_EVERY_SECS:-0}"
 export SOAK_WAVES="${SOAK_WAVES:-36}"
 export SOAK_WAVE_MS="${SOAK_WAVE_MS:-3500}"
 
@@ -32,13 +36,22 @@ echo "== starting 3 workers =="
 for i in 1 2 3; do start_worker "$i"; done
 sleep 6
 
-echo "== chaos for ${CHAOS_SECS}s (kill -9 every ~4s, DB restarts at 1/3 and 2/3) =="
+echo "== chaos for ${CHAOS_SECS}s (kill -9 every ~4s, DB restart every ${DB_EVERY}s; 0 = 1/3 and 2/3 marks) =="
 (
   end=$((SECONDS + CHAOS_SECS))
   n=0
-  third=$((CHAOS_SECS / 3))
-  db1=$((SECONDS + third))
-  db2=$((SECONDS + 2 * third))
+  if [ "$DB_EVERY" -gt 0 ]; then
+    nextdb=$((SECONDS + DB_EVERY))
+  else
+    third=$((CHAOS_SECS / 3))
+    db1=$((SECONDS + third))
+    db2=$((SECONDS + 2 * third))
+    nextdb=$((end + 999999))
+  fi
+  restart_db() {
+    echo "DBRESTART $(date +%s)" >> soak/tmp/chaos.log
+    docker restart "$DBCONT" > /dev/null 2>&1
+  }
   while [ $SECONDS -lt $end ]; do
     sleep 4
     i=$(((RANDOM % 3) + 1))
@@ -48,15 +61,20 @@ echo "== chaos for ${CHAOS_SECS}s (kill -9 every ~4s, DB restarts at 1/3 and 2/3
     sleep 1
     start_worker "$i"
     n=$((n + 1))
-    if [ $SECONDS -ge $db1 ]; then
-      db1=$((end + 999999))
-      echo "DBRESTART $(date +%s)" >> soak/tmp/chaos.log
-      docker restart "$DBCONT" > /dev/null 2>&1
-    fi
-    if [ $SECONDS -ge $db2 ]; then
-      db2=$((end + 999999))
-      echo "DBRESTART $(date +%s)" >> soak/tmp/chaos.log
-      docker restart "$DBCONT" > /dev/null 2>&1
+    if [ "$DB_EVERY" -gt 0 ]; then
+      if [ $SECONDS -ge $nextdb ]; then
+        nextdb=$((SECONDS + DB_EVERY))
+        restart_db
+      fi
+    else
+      if [ $SECONDS -ge $db1 ]; then
+        db1=$((end + 999999))
+        restart_db
+      fi
+      if [ $SECONDS -ge $db2 ]; then
+        db2=$((end + 999999))
+        restart_db
+      fi
     fi
   done
   echo "CHAOS DONE $(date +%s)" >> soak/tmp/chaos.log
