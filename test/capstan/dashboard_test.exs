@@ -128,4 +128,53 @@ defmodule Capstan.DashboardTest do
     {mod, ref} = storage(name)
     assert {:ok, %{"n" => 1}} = mod.get_signal(ref, ["custom"], "ping")
   end
+
+  test "SSE stream authenticates and pushes an overview frame immediately",
+       %{base: base, name: name} do
+    {:ok, _} = Capstan.insert(name, Tagged.new(%{"tag" => "sse"}))
+    Testing.drain(name, :default)
+
+    %{port: port} = URI.parse(base)
+    {:ok, socket} = :gen_tcp.connect(~c"localhost", port, [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(socket, "GET /api/sse?token=s3cret HTTP/1.1\r\nhost: localhost\r\n\r\n")
+
+    raw = read_first_frame(socket, "")
+    :gen_tcp.close(socket)
+
+    assert raw =~ "HTTP/1.1 200 OK"
+    assert raw =~ "content-type: text/event-stream"
+
+    # Frames are `data: <json>\n\n`; headers use \r\n so the bare \n\n
+    # terminator is unambiguous.
+    [_headers, frame] = String.split(raw, "data: ", parts: 2)
+    [json | _] = String.split(frame, "\n\n", parts: 2)
+    overview = Jason.decode!(json)
+
+    assert overview["stats"]["default"]["succeeded"] == 1
+  end
+
+  test "SSE stream rejects bad tokens", %{base: base} do
+    assert {401, _} = get!(base <> "/api/sse?token=wrong")
+  end
+
+  # Read until one complete SSE frame has arrived (the stream never closes
+  # on its own, so `read_all/2` would hang here).
+  defp read_first_frame(socket, acc) do
+    case String.split(acc, "data: ", parts: 2) do
+      [_, frame] when frame != "" ->
+        if String.contains?(frame, "\n\n"), do: acc, else: recv_more(socket, acc)
+
+      _ ->
+        recv_more(socket, acc)
+    end
+  end
+
+  defp recv_more(socket, acc) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, chunk} -> read_first_frame(socket, acc <> chunk)
+      {:error, _} -> acc
+    end
+  end
 end

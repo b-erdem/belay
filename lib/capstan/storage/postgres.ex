@@ -358,7 +358,10 @@ defmodule Capstan.Storage.Postgres do
   # Applies the outcome to the row (optionally fenced on state+attempt), then
   # settles the workflow and notifies waiting parents — one transaction.
   defp apply_and_settle(conn, job, outcome, now, fence: fence?) do
-    updated = Logic.apply_outcome(%{job | cancel_requested: false}, outcome, now)
+    # cancel_requested survives non-terminal transitions: a cancel request
+    # must not be lost because the worker crashed or the run retried — the
+    # next execution's step boundary honors it (equivalence-test finding).
+    updated = Logic.apply_outcome(job, outcome, now)
 
     # Close the await race: the scope advisory lock serializes parking against
     # signal delivery (which takes the same lock), so either the signal lands
@@ -392,7 +395,7 @@ defmodule Capstan.Storage.Postgres do
         UPDATE capstan_jobs
         SET state = $2, ready_at = $3, attempt = $4, lease_until = $5, leased_by = $6,
             await_scope = $7, await_name = $8, result = $9, errors = $10,
-            cancel_requested = false, finished_at = $11
+            finished_at = $11
         WHERE id = $1#{fence_sql}
         """,
         [

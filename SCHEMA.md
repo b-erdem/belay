@@ -200,8 +200,10 @@ One transaction per ack. The terminal/park UPDATE is **fenced**:
 `WHERE id=$id AND state='running' AND attempt=$claimed_attempt`. Zero rows
 ⇒ the ack is stale (job was reclaimed); the SDK MUST discard it silently.
 
-Outcome column effects (all also `SET lease_until=NULL, leased_by=NULL,
-cancel_requested=false`):
+Outcome column effects (all also `SET lease_until=NULL, leased_by=NULL`;
+`cancel_requested` is **never cleared by transitions** — a pending cancel
+request survives crashes and retries until a step boundary honors it or the
+job goes terminal, where it becomes moot):
 
 | Outcome | state | other columns |
 |---|---|---|

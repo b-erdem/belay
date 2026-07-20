@@ -90,3 +90,28 @@ For pure logic, call `run/1` yourself with a hand-built ctx — or better,
 factor the logic out and keep `run/1` as orchestration, testing the
 orchestration through drain as above. The drain path exercises the real
 claim/ack machinery, which is where the bugs live.
+
+## How Capstan itself is tested
+
+If you're contributing (or judging whether to trust this thing in
+production), here is the taxonomy of the suite and what each layer is for:
+
+| Layer | Where | What it catches |
+|---|---|---|
+| Unit | `test/capstan/{logic,cron_expr,input_schema,config,codec}_test.exs` | Pure-function bugs: rate math, cron matching, schema validation, config validation, value encoding |
+| Integration | most of `test/capstan/*_test.exs` | Feature behavior through the real claim/ack machinery, run against **both** storage adapters |
+| Property | seeded loops in `logic_test.exs`, `adapter_equivalence_test.exs` | Invariants across generated inputs (allowances bounded and monotone; adapters behaviorally identical) |
+| Adapter equivalence | `adapter_equivalence_test.exs` | Random command sequences applied to Memory and Postgres in lockstep, full-state dumps compared after every step. Found a real bug on its first run (a pending cancel request was silently dropped by the Postgres ack path) |
+| Chaos soak | `soak/` (not in `mix test`) | Crash-consistency: worker `kill -9`, DB restarts, then 13 invariants verified by reading the database — no lost jobs, no double effects, no stuck states |
+| Performance | `bench/` (not in `mix test`) | Dispatch latency and throughput, measured and recorded in docs — deliberately outside CI because timing assertions flake |
+
+Two rules keep the suite honest:
+
+- **Every feature test runs on both adapters.** `mix test` uses Memory;
+  `CAPSTAN_PG=1 mix test` reruns the same files on Postgres. A test that
+  only passes on one adapter is a bug somewhere — in the adapter or in
+  the test.
+- **No sleeps for correctness.** Anything time-dependent goes through the
+  simulated clock. If a test needs `Process.sleep` to pass, the design is
+  wrong (the few sleeps that exist assert *absence* of activity, e.g.
+  "a paused queue claims nothing").

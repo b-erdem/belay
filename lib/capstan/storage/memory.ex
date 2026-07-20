@@ -161,6 +161,11 @@ defmodule Capstan.Storage.Memory do
   def handle_call({:insert_jobs, rows, _now}, _from, state) do
     {jobs, state} =
       Enum.reduce(rows, {[], state}, fn row, {acc, state} ->
+        # Mirror Postgres bigserial semantics: the sequence advances even for
+        # conflict-skipped rows, so ids stay comparable across adapters.
+        id = state.seq + 1
+        state = %{state | seq: id}
+
         cond do
           duplicate_cron?(state, row) ->
             {acc, state}
@@ -169,13 +174,11 @@ defmodule Capstan.Storage.Memory do
             {acc, state}
 
           true ->
-            id = state.seq + 1
             job = struct(Job, Map.put(row, :id, id))
 
             state = %{
               state
-              | seq: id,
-                jobs: Map.put(state.jobs, id, job),
+              | jobs: Map.put(state.jobs, id, job),
                 cron_slots:
                   if(row[:cron_name],
                     do: MapSet.put(state.cron_slots, {row[:cron_name], row[:cron_slot]}),
@@ -287,7 +290,7 @@ defmodule Capstan.Storage.Memory do
   def handle_call({:ack, job, outcome, now}, _from, state) do
     case state.jobs[job.id] do
       %Job{state: "running", attempt: attempt} = current when attempt == job.attempt ->
-        updated = Logic.apply_outcome(%{current | cancel_requested: false}, outcome, now)
+        updated = Logic.apply_outcome(current, outcome, now)
 
         # Close the await race: a signal delivered while the job was still
         # running couldn't wake it; if it exists now, park-and-wake atomically.

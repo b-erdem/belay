@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+- **Cancel requests now survive crashes and retries.** The adapter-
+  equivalence property test (below) caught the Postgres ack path clearing
+  `cancel_requested` on reclaim/retry while Memory preserved it — silently
+  losing a user's cancellation if the worker died before honoring it. The
+  flag now persists across all non-terminal transitions on both adapters;
+  the wire contract states it normatively.
+
 ### Added
 - **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
   versioned protocol: tables, state machine, annotated SQL for every
