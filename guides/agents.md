@@ -106,9 +106,29 @@ messages (a LiveView showing agent progress is a few lines);
 `Capstan.events/3` replays from any offset — reconnecting clients and
 crashed subscribers lose nothing.
 
+## Dispatch fast enough for tool-call fan-outs
+
+Sub-agent dispatch is on the critical path of every agent turn. With the
+opt-in Postgres notifier (`notifiers: [:local, :postgres]`), insert→result
+round trips measure ~11ms p50 even across unconnected worker fleets — see
+[operations](operations.md#dispatch-latency) for the full table. A
+`map_children` fan-out of quick tool calls costs milliseconds of overhead
+per child, not poll intervals.
+
 ## Let agents operate the queue
 
 `mix capstan.mcp --url postgres://...` serves an MCP server any assistant can
 use to check `stats`, read a job's steps and events, `retry_job`,
 `cancel_job`, deliver a `signal`, or `steer_job` — the infrastructure your
 agents run on becomes infrastructure your agents can also inspect and fix.
+
+**Authority for operating agents.** Mutating MCP tools accept a pluggable
+authorizer (`mix capstan.mcp --authorizer MyGuard`, or `authorizer:` on
+`Capstan.MCP.serve/2`): a module deciding `authorize(tool, args) → :ok |
+{:error, msg}` before any retry/cancel/signal/steer executes. This is the
+natural mount point for capability-token systems like
+[Legant](https://github.com/legant-dev/legant) — verify the agent's grant
+offline and let a supervising agent steer only the jobs its token attenuates
+to. The same idea extends to spawn chains: carry a grant in job `meta` and
+attenuate it in `spawn/3` inputs, so a child agent can never hold more
+authority than its parent.

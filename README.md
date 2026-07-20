@@ -58,8 +58,11 @@ leader-elected, or paid. Capstan's bets:
   dedupes through a unique index; recovery is idempotent row-level work any
   node performs. The "leader stalled, nothing runs" failure class is
   structurally absent.
-- **No LISTEN/NOTIFY.** Jittered polling plus in-cluster pokes. PgBouncer
-  transaction pooling and serverless Postgres just work.
+- **Millisecond dispatch, polling-floor correctness.** Local pokes plus
+  adaptive burst polling plus an opt-in `pg_notify` accelerator: measured
+  ~9ms p50 insert→result same-node and ~11ms p50 across unconnected
+  processes — while nothing load-bearing depends on LISTEN/NOTIFY, so
+  PgBouncer transaction pooling and serverless Postgres just work.
 - **Leases with fencing, not rescue heuristics.** Crashed workers' jobs are
   reclaimed in seconds; zombie acks are rejected by attempt fencing.
 - **One scheduling rule.** A job is claimable when `ready_at` is due —
@@ -85,7 +88,8 @@ leader-elected, or paid. Capstan's bets:
 | Cluster limits | `global_limit`, sliding-window `rate` (request- or **token**-based with true-up), per-tenant `partition` |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with slot dedup |
 | Operations | `stats`, `list_jobs`, `retry_job`, pause/resume, retention pruning, telemetry, graceful shutdown |
-| **MCP server** | `mix capstan.mcp` — AI assistants inspect and operate the queue over stdio |
+| Fast dispatch | adaptive burst polling + opt-in `pg_notify` accelerator: ~11ms p50 cross-process round trips (measured, `bench/`) |
+| **MCP server** | `mix capstan.mcp` — AI assistants inspect and operate the queue over stdio, with a pluggable authorizer for mutations |
 
 ## Quick start
 

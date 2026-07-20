@@ -24,7 +24,16 @@ defmodule Capstan.Producer do
 
     :pg.join(Capstan.pg_scope(config.name), {:producers, queue}, self())
 
-    state = %{config: config, queue: queue, spec: spec, running: %{}, paused: false}
+    state = %{
+      config: config,
+      queue: queue,
+      spec: spec,
+      running: %{},
+      paused: false,
+      # Adaptive cadence: busy_poll while work is flowing, decaying to
+      # poll_interval when idle — burst latency without idle DB load.
+      interval: config.busy_poll
+    }
 
     {:ok, schedule_poll(state), {:continue, :claim}}
   end
@@ -37,7 +46,12 @@ defmodule Capstan.Producer do
     {:noreply, state |> claim() |> schedule_poll()}
   end
 
-  def handle_info(:poke, state), do: {:noreply, claim(state)}
+  def handle_info(:poke, state) do
+    # Coalesce poke storms (one wake per burst, not one claim per insert).
+    flush_pokes()
+
+    {:noreply, claim(%{state | interval: state.config.busy_poll})}
+  end
 
   def handle_info(:capstan_pause, state), do: {:noreply, %{state | paused: true}}
 
@@ -80,7 +94,7 @@ defmodule Capstan.Producer do
           Map.put(acc, task.ref, job.id)
         end)
 
-      %{state | running: running}
+      adapt(%{state | running: running}, length(jobs))
     end
   rescue
     error ->
@@ -91,13 +105,32 @@ defmodule Capstan.Producer do
           Exception.message(error)
       )
 
-      state
+      adapt(state, 0)
   end
 
-  defp schedule_poll(%{config: config} = state) do
-    jitter = :rand.uniform(div(config.poll_interval, 4) + 1)
+  defp adapt(%{config: config} = state, claimed) do
+    interval =
+      if claimed > 0 do
+        config.busy_poll
+      else
+        min(state.interval * 2, config.poll_interval)
+      end
 
-    Process.send_after(self(), :poll, config.poll_interval + jitter)
+    %{state | interval: interval}
+  end
+
+  defp flush_pokes do
+    receive do
+      :poke -> flush_pokes()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp schedule_poll(%{interval: interval} = state) do
+    jitter = :rand.uniform(div(interval, 4) + 1)
+
+    Process.send_after(self(), :poll, interval + jitter)
 
     state
   end

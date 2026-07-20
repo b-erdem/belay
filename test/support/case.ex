@@ -48,6 +48,8 @@ defmodule Capstan.Test.Case do
       storage: storage,
       clock: clock,
       queues: Keyword.get(opts, :queues, default: [limit: 10, manual: true]),
+      notifiers: Keyword.get(opts, :notifiers, [:local]),
+      busy_poll: Keyword.get(opts, :busy_poll, 25),
       crons: Keyword.get(opts, :crons, []),
       poll_interval: Keyword.get(opts, :poll_interval, 100),
       lease_ttl: Keyword.get(opts, :lease_ttl, 30_000),

@@ -82,7 +82,10 @@ defmodule Capstan do
         {Registry, keys: :unique, name: registry(config.name)},
         {Registry, keys: :duplicate, name: run_registry(config.name)},
         %{id: :pg, start: {:pg, :start_link, [pg_scope(config.name)]}},
-        storage_mod.child_spec({config, storage_opts}),
+        storage_mod.child_spec({config, storage_opts})
+      ] ++
+        Capstan.Notifier.children(config) ++
+        [
         {Task.Supervisor, name: task_sup(config.name)},
         {Capstan.LeaseKeeper, config},
         {Capstan.Sweeper, config},
@@ -259,7 +262,10 @@ defmodule Capstan do
     result
   end
 
-  defp await_loop(check, config, id, deadline) do
+  # Wake instantly on a result notification; otherwise re-check on an
+  # exponential 5ms → 200ms backoff, so short agent tasks return in
+  # milliseconds even when the completion happened on an unconnected node.
+  defp await_loop(check, config, id, deadline, interval \\ 5) do
     case check.() do
       :pending ->
         remaining = deadline - monotonic_ms()
@@ -268,9 +274,10 @@ defmodule Capstan do
           {:error, :timeout}
         else
           receive do
-            {:capstan_result, ^id, _job} -> await_loop(check, config, id, deadline)
+            {:capstan_result, ^id, _info} -> await_loop(check, config, id, deadline)
           after
-            min(remaining, 200) -> await_loop(check, config, id, deadline)
+            min(remaining, interval) ->
+              await_loop(check, config, id, deadline, min(interval * 2, 200))
           end
         end
 
@@ -401,18 +408,7 @@ defmodule Capstan do
 
   @doc false
   def poke(%Config{} = config, queue) do
-    case Registry.lookup(registry(config.name), {:producer, to_string(queue)}) do
-      [{pid, _}] -> send(pid, :poke)
-      _ -> :ok
-    end
-
-    :pg.get_members(pg_scope(config.name), {:producers, to_string(queue)})
-    |> Enum.each(&send(&1, :poke))
-
-    :ok
-  catch
-    # :pg scope may not be running (bare drain in tests).
-    :exit, _ -> :ok
+    Capstan.Notifier.broadcast_all(config, {:poke, to_string(queue)})
   end
 
   @doc false

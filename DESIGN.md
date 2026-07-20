@@ -123,15 +123,25 @@ the lease TTL — seconds, not Lifeline's default hour — and acks are **fenced
 they update `WHERE id = $id AND attempt = $attempt AND state = 'running'`, so a
 reclaimed-and-rerun job can't be clobbered by a zombie's late ack.
 
-## 6. Dispatch without LISTEN/NOTIFY
+## 6. Dispatch: polling floor, accelerator layers
 
-Every producer polls with jitter (default 500ms) — that alone is a correct
-system with worst-case pickup latency of one poll. When nodes are clustered,
-completions and inserts broadcast a lightweight poke via `:pg` process groups,
-making pickup effectively immediate. Postgres NOTIFY is deliberately absent:
-the failure mode research showed it silently degrading under PgBouncer,
-Supavisor, RDS Proxy, and serverless Postgres — a queue's signal plane
-shouldn't depend on it.
+The original rule stands: **nothing load-bearing depends on LISTEN/NOTIFY**
+(the failure-mode research showed it silently degrading under PgBouncer,
+Supavisor, RDS Proxy, and serverless Postgres). What changed for the agent
+era is the layering above that floor:
+
+1. Producers poll adaptively — `busy_poll` (25ms) while work flows, decaying
+   to `poll_interval` (500ms) idle — so bursts are fast and idle is cheap.
+2. Inserts/releases/completions poke local producers instantly, and clustered
+   BEAM nodes via `:pg`.
+3. An **opt-in** `pg_notify` notifier extends pokes across fleets that share
+   Postgres but not an Erlang cluster. It is an accelerator: if the listen
+   connection dies (pooler, restart), latency degrades to the polling floor
+   and nothing else changes.
+
+Measured on stock settings (bench/): ~9ms p50 same-node, ~11ms p50 / ~25ms
+p99 cross-process with the notifier, ~50ms p50 / ~200ms p99 cross-process on
+adaptive polling alone.
 
 ## 7. Storage behaviour
 

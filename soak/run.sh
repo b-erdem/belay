@@ -69,7 +69,10 @@ RC=$?
 
 kill "$CHAOS_PID" 2>/dev/null
 wait "$CHAOS_PID" 2>/dev/null
-for i in 1 2 3; do kill -9 "${PIDS[$i]}" 2>/dev/null; done
+# The chaos subshell respawns workers under its own PID bookkeeping, so kill
+# by pattern — otherwise respawned workers outlive the run holding DB
+# connections.
+pkill -9 -f "soak/worker.exs" 2>/dev/null
 
 STALE=$(grep -h -c "stale ack" soak/tmp/worker*.log 2>/dev/null | paste -sd+ - | bc)
 SKIPPED=$(grep -h -c "claim skipped" soak/tmp/worker*.log 2>/dev/null | paste -sd+ - | bc)

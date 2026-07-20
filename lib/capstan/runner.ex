@@ -448,6 +448,8 @@ defmodule Capstan.Runner do
       Registry.dispatch(Capstan.run_registry(config.name), {:result, job.id}, fn entries ->
         for {pid, _} <- entries, do: send(pid, {:capstan_result, job.id, job})
       end)
+
+      Capstan.Notifier.broadcast_all(config, {:result, job.id})
     end
   rescue
     ArgumentError -> :ok

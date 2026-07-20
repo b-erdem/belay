@@ -9,6 +9,8 @@ defmodule Capstan.Config do
             clock: Capstan.Clock.System,
             node_id: nil,
             poll_interval: 500,
+            busy_poll: 25,
+            notifiers: [{Capstan.Notifier.Local, []}],
             lease_ttl: 30_000,
             sweep_interval: 5_000,
             cron_interval: 20_000,
@@ -29,6 +31,8 @@ defmodule Capstan.Config do
       clock: Keyword.get(opts, :clock, Capstan.Clock.System),
       node_id: Keyword.get(opts, :node_id, default_node_id()),
       poll_interval: Keyword.get(opts, :poll_interval, 500),
+      busy_poll: Keyword.get(opts, :busy_poll, 25),
+      notifiers: normalize_notifiers(Keyword.get(opts, :notifiers, [:local]), opts),
       lease_ttl: Keyword.get(opts, :lease_ttl, 30_000),
       sweep_interval: Keyword.get(opts, :sweep_interval, 5_000),
       cron_interval: Keyword.get(opts, :cron_interval, 20_000),
@@ -72,6 +76,29 @@ defmodule Capstan.Config do
   defp storage_module(:memory), do: Capstan.Storage.Memory
   defp storage_module(:postgres), do: Capstan.Storage.Postgres
   defp storage_module(module) when is_atom(module), do: module
+
+  defp normalize_notifiers(notifiers, opts) do
+    storage_mod = opts |> Keyword.fetch!(:storage) |> normalize_storage() |> elem(0)
+
+    Enum.map(notifiers, fn entry ->
+      {module, nopts} =
+        case entry do
+          :local -> {Capstan.Notifier.Local, []}
+          :postgres -> {Capstan.Notifier.Postgres, []}
+          {shorthand, nopts} when shorthand in [:local, :postgres] ->
+            {elem(normalize_notifiers([shorthand], opts) |> hd(), 0), nopts}
+
+          module when is_atom(module) -> {module, []}
+          {module, nopts} when is_atom(module) -> {module, nopts}
+        end
+
+      if module == Capstan.Notifier.Postgres and storage_mod != Capstan.Storage.Postgres do
+        raise ArgumentError, "the :postgres notifier requires the :postgres storage adapter"
+      end
+
+      {module, nopts}
+    end)
+  end
 
   defp normalize_queues(queues) do
     Map.new(queues, fn

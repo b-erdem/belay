@@ -23,11 +23,49 @@ On SIGTERM, producers stop claiming first, running jobs get
 its lease expires and another node picks it up. Set `shutdown_grace` just
 under your platform's kill timeout.
 
+## Dispatch latency
+
+Agent workloads are bursts of short tasks, so dispatch overhead is the
+product. Capstan layers three mechanisms — each optional layer only buys
+latency; polling remains the correctness floor:
+
+1. **Local pokes** (always on): inserts, releases, and completions poke
+   producers on the same node instantly, and across BEAM nodes when you run
+   distributed Erlang.
+2. **Adaptive polling** (always on): producers poll at `busy_poll` (25ms)
+   while work flows and decay to `poll_interval` (500ms) when idle — burst
+   latency without idle database load. Poke storms coalesce into single
+   claim rounds.
+3. **`pg_notify` accelerator** (opt-in, `notifiers: [:local, :postgres]`):
+   wake-ups ride the database itself, for fleets that share Postgres but not
+   an Erlang cluster. One dedicated listen connection per node
+   (auto-reconnecting; point `listen_url:` past any transaction pooler);
+   payloads are a queue name or job id, far under NOTIFY's limits.
+
+Measured insert→result round trips (`bench/run.sh`, stock settings, local
+Postgres 16, M1):
+
+| Topology | p50 | p90 | p99 | 100-job burst |
+|---|---|---|---|---|
+| same node (pokes) | 8.6ms | 10.4ms | 13.0ms | 336ms |
+| cross-process, polling only | 49.4ms | 179ms | 202ms | 349ms |
+| cross-process + `pg_notify` | 11.0ms | 12.8ms | 24.5ms | 371ms |
+
+Honest caveats: Postgres serializes NOTIFY-issuing transactions on a global
+queue at commit, so at very high sustained insert rates the accelerator
+itself becomes a contention point — Capstan already coalesces to one poke
+per queue per insert call, and if you ever see NOTIFY contention you can
+drop back to `[:local]` and keep the adaptive-polling latencies above.
+`await_result` wakes on result notifications and otherwise re-checks on a
+5ms→200ms backoff.
+
 ## Sizing the loop
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `poll_interval` | 500ms | worst-case pickup latency without a poke |
+| `poll_interval` | 500ms | idle polling ceiling (worst-case cold pickup) |
+| `busy_poll` | 25ms | polling cadence while a queue is hot |
+| `notifiers` | `[:local]` | add `:postgres` for cross-fleet NOTIFY wake-ups |
 | `lease_ttl` | 30s | crash-orphan window; renewed at ttl/3 |
 | `sweep_interval` | 5s | reclaim + retention cadence |
 | `shutdown_grace` | 15s | time running jobs get on shutdown |

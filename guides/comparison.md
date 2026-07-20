@@ -61,10 +61,14 @@ fills.
 
 - You need a UI today (ours is on the roadmap; Oban Web is excellent).
 - You need SQLite/MySQL storage, or enqueueing inside your Ecto
-  transactions (both planned; not in rc.1).
-- You need sub-100ms dispatch latency at massive scale — poll-first tops out
-  at `poll_interval` pickup latency off-node.
+  transactions (both planned; not in rc).
 - You need something proven over years. Capstan is honest about being new:
   the suite is strong and runs identically against both storage adapters,
   but production miles are the one feature that can't be implemented in a
   sprint.
+
+(Dispatch latency used to belong on this list; it doesn't anymore. Measured
+insert→result round trips on stock settings: ~9ms p50 same-node, ~11ms p50 /
+~25ms p99 across unconnected processes with the opt-in `pg_notify`
+accelerator, with adaptive polling as the always-correct floor — see the
+[operations guide](operations.md#dispatch-latency) and `bench/`.)

@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.0-rc.3 — 2026-07-20
+
+Dispatch-latency release: agent workloads are bursts of short tasks, so
+insert→result overhead is the product. Measured on stock settings
+(`bench/run.sh`): ~9ms p50 same-node, ~11ms p50 / ~25ms p99 across
+unconnected OS processes with the new notifier, ~50ms p50 on adaptive
+polling alone (vs ~250ms average before).
+
+### Added
+- **Notifier layer** (`Capstan.Notifier`): wake-ups as accelerators, never
+  load-bearing. `:local` (registry + `:pg`, always on) and opt-in
+  `:postgres` — `pg_notify` pokes and result notifications across fleets
+  that share Postgres but not an Erlang cluster, with a dedicated
+  auto-reconnecting listen connection per node and channel names scoped per
+  database. If the channel is down, latency falls back to the polling floor;
+  correctness never depends on NOTIFY.
+- **Adaptive burst polling**: producers poll at `busy_poll` (default 25ms)
+  while claiming work and decay exponentially to `poll_interval` when idle;
+  poke storms coalesce into single claim rounds.
+- **Fast `await_result`**: wakes on result notifications; otherwise
+  re-checks on a 5ms→200ms backoff instead of a fixed 200ms.
+- **MCP authorizer hook**: `mix capstan.mcp --authorizer MyGuard` (or
+  `authorizer:` on `Capstan.MCP.serve/2`) gates the mutating tools
+  (retry/cancel/signal/steer) behind `authorize(tool, args)` — the mount
+  point for capability-token systems (e.g. Legant) supervising operating
+  agents.
+- `bench/` — reproducible latency benchmark across the three topologies.
+
+### Fixed
+- Soak/bench harnesses now clean up respawned workers by pattern (stray
+  workers were exhausting Postgres connections).
+
 ## 1.0.0-rc.2 — 2026-07-20
 
 Hardening release driven by the chaos soak harness (`soak/`), which runs a

@@ -62,6 +62,49 @@ defmodule Capstan.MCPTest do
     assert detail["result"] =~ ":emitted"
   end
 
+  test "an authorizer gates mutating tools but never introspection", %{name: name} do
+    {:ok, job} =
+      Capstan.insert(name, Tagged.new(%{"tag" => "f", "fail" => true}, max_attempts: 1))
+
+    Testing.drain(name, :default)
+
+    deny_cancel = fn
+      "cancel_job", _args -> {:error, "grant does not permit cancel"}
+      _tool, _args -> :ok
+    end
+
+    request = fn tool, args ->
+      %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => tool, "arguments" => args}
+      }
+    end
+
+    %{"result" => denied} =
+      MCP.handle_request(request.("cancel_job", %{"id" => job.id}), storage(name),
+        authorizer: deny_cancel
+      )
+
+    assert denied["isError"] == true
+    assert [%{"text" => text}] = denied["content"]
+    assert text =~ "unauthorized: grant does not permit cancel"
+
+    # Reads are never gated, and permitted mutations pass through.
+    %{"result" => stats} =
+      MCP.handle_request(request.("stats", %{}), storage(name), authorizer: deny_cancel)
+
+    refute Map.get(stats, "isError", false)
+
+    %{"result" => retried} =
+      MCP.handle_request(request.("retry_job", %{"id" => job.id}), storage(name),
+        authorizer: deny_cancel
+      )
+
+    refute Map.get(retried, "isError", false)
+  end
+
   test "mutation tools operate jobs", %{name: name} do
     {:ok, failed} = Capstan.insert(name, Tagged.new(%{"tag" => "f", "fail" => true}, max_attempts: 1))
     {:ok, waiting} = Capstan.insert(name, Awaiter.new(%{}))

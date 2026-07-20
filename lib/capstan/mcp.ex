@@ -20,8 +20,20 @@ defmodule Capstan.MCP do
 
   # -- Serving ------------------------------------------------------------------
 
-  @doc "Blocking stdio serve loop. `storage` is a `{module, ref}` pair."
-  def serve(storage) do
+  @doc """
+  Blocking stdio serve loop. `storage` is a `{module, ref}` pair.
+
+  Options:
+
+    * `:authorizer` — a module exporting `authorize(tool_name, args)` (or a
+      2-arity fun) returning `:ok` or `{:error, message}`, consulted before
+      every **mutating** tool call (`retry_job`, `cancel_job`, `signal`,
+      `steer_job`). Introspection tools are never gated. This is the hook for
+      capability systems such as [Legant](https://github.com/legant-dev/legant):
+      verify the caller's grant offline and deny anything the token doesn't
+      attenuate to.
+  """
+  def serve(storage, opts \\ []) do
     case IO.read(:stdio, :line) do
       :eof ->
         :ok
@@ -32,18 +44,18 @@ defmodule Capstan.MCP do
       line ->
         line
         |> String.trim()
-        |> handle_line(storage)
+        |> handle_line(storage, opts)
 
-        serve(storage)
+        serve(storage, opts)
     end
   end
 
-  defp handle_line("", _storage), do: :ok
+  defp handle_line("", _storage, _opts), do: :ok
 
-  defp handle_line(line, storage) do
+  defp handle_line(line, storage, opts) do
     case Jason.decode(line) do
       {:ok, request} ->
-        case handle_request(request, storage) do
+        case handle_request(request, storage, opts) do
           nil -> :ok
           response -> IO.write([Jason.encode!(response), "\n"])
         end
@@ -56,7 +68,9 @@ defmodule Capstan.MCP do
   # -- Request handling (pure; unit-testable) -----------------------------------
 
   @doc false
-  def handle_request(%{"method" => "initialize", "id" => id}, _storage) do
+  def handle_request(request, storage, opts \\ [])
+
+  def handle_request(%{"method" => "initialize", "id" => id}, _storage, _opts) do
     result(id, %{
       "protocolVersion" => @protocol_version,
       "capabilities" => %{"tools" => %{}},
@@ -64,26 +78,27 @@ defmodule Capstan.MCP do
     })
   end
 
-  def handle_request(%{"method" => "notifications/" <> _}, _storage), do: nil
+  def handle_request(%{"method" => "notifications/" <> _}, _storage, _opts), do: nil
 
-  def handle_request(%{"method" => "ping", "id" => id}, _storage), do: result(id, %{})
+  def handle_request(%{"method" => "ping", "id" => id}, _storage, _opts), do: result(id, %{})
 
-  def handle_request(%{"method" => "tools/list", "id" => id}, _storage) do
+  def handle_request(%{"method" => "tools/list", "id" => id}, _storage, _opts) do
     result(id, %{"tools" => tools()})
   end
 
   def handle_request(
         %{"method" => "tools/call", "id" => id, "params" => %{"name" => tool} = params},
-        storage
+        storage,
+        opts
       ) do
     args = Map.get(params, "arguments", %{})
 
-    case call_tool(tool, args, storage) do
-      {:ok, data} ->
-        result(id, %{
-          "content" => [%{"type" => "text", "text" => Jason.encode!(data, pretty: true)}]
-        })
-
+    with :ok <- authorize(Keyword.get(opts, :authorizer), tool, args),
+         {:ok, data} <- call_tool(tool, args, storage) do
+      result(id, %{
+        "content" => [%{"type" => "text", "text" => Jason.encode!(data, pretty: true)}]
+      })
+    else
       {:error, message} ->
         result(id, %{
           "content" => [%{"type" => "text", "text" => message}],
@@ -92,11 +107,27 @@ defmodule Capstan.MCP do
     end
   end
 
-  def handle_request(%{"id" => id}, _storage) do
+  def handle_request(%{"id" => id}, _storage, _opts) do
     error_response(id, -32601, "method not found")
   end
 
-  def handle_request(_request, _storage), do: nil
+  def handle_request(_request, _storage, _opts), do: nil
+
+  @mutating_tools ~w(retry_job cancel_job signal steer_job)
+
+  defp authorize(nil, _tool, _args), do: :ok
+  defp authorize(_authorizer, tool, _args) when tool not in @mutating_tools, do: :ok
+
+  defp authorize(authorizer, tool, args) do
+    case run_authorizer(authorizer, tool, args) do
+      :ok -> :ok
+      {:error, message} -> {:error, "unauthorized: #{message}"}
+      other -> {:error, "unauthorized: #{inspect(other)}"}
+    end
+  end
+
+  defp run_authorizer(fun, tool, args) when is_function(fun, 2), do: fun.(tool, args)
+  defp run_authorizer(module, tool, args) when is_atom(module), do: module.authorize(tool, args)
 
   # -- Tools --------------------------------------------------------------------
 
@@ -326,11 +357,17 @@ defmodule Mix.Tasks.Capstan.Mcp do
 
   @impl Mix.Task
   def run(argv) do
-    {opts, _rest} = OptionParser.parse!(argv, strict: [url: :string])
+    {opts, _rest} = OptionParser.parse!(argv, strict: [url: :string, authorizer: :string])
 
     url =
       opts[:url] || System.get_env("CAPSTAN_URL") ||
         Mix.raise("pass --url postgres://... or set CAPSTAN_URL")
+
+    authorizer =
+      case opts[:authorizer] do
+        nil -> nil
+        name -> name |> String.replace_prefix("Elixir.", "") |> then(&Module.concat([&1]))
+      end
 
     Mix.Task.run("app.config")
     {:ok, _} = Application.ensure_all_started(:postgrex)
@@ -347,6 +384,6 @@ defmodule Mix.Tasks.Capstan.Mcp do
 
     {:ok, _} = Postgrex.start_link(conn_opts)
 
-    Capstan.MCP.serve({Capstan.Storage.Postgres, Capstan.MCP.Conn})
+    Capstan.MCP.serve({Capstan.Storage.Postgres, Capstan.MCP.Conn}, authorizer: authorizer)
   end
 end
