@@ -27,3 +27,4 @@ capstan-*.tar
 /tmp/
 doc/
 soak/tmp/
+capstan-*.tar
