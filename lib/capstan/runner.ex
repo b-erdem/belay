@@ -1,24 +1,34 @@
 defmodule Capstan.Runner do
   @moduledoc false
 
-  # Executes one claimed job: runs the worker, translates returns/raises/control
-  # throws into an ack outcome, acks (fenced), broadcasts the result, and pokes
-  # producers for any workflow jobs released by the ack.
+  # Executes one claimed job: runs the worker (optionally under a timeout),
+  # translates returns/raises/control throws into an ack outcome, acks
+  # (fenced), broadcasts results, and pokes producers for released jobs.
+  #
+  # Also implements the in-job APIs surfaced on `Capstan`: step, await, sleep,
+  # spawn/await_children, emit, debit, steering — including their replay-mode
+  # behavior (see `Capstan.Replay`).
 
   require Logger
 
   alias Capstan.{Config, Ctx, Job, Worker}
 
+  # -- Execution ----------------------------------------------------------------
+
   def execute(%Config{} = config, %Job{} = job) do
     register_running(config, job.id)
 
     ctx = %Ctx{job: job, capstan: config.name, config: config}
+    started = System.monotonic_time()
 
-    :telemetry.execute([:capstan, :job, :start], %{}, %{job: job, name: config.name})
+    :telemetry.execute([:capstan, :job, :start], %{system_time: System.system_time()}, %{
+      job: job,
+      name: config.name
+    })
 
     outcome =
       try do
-        job |> Job.worker_module!() |> apply(:run, [ctx]) |> map_return(config, job)
+        run_worker(Job.worker_module!(job), ctx) |> map_return(config, job)
       catch
         :throw, {:capstan_control, control} ->
           control_outcome(control, config, job)
@@ -31,7 +41,11 @@ defmodule Capstan.Runner do
 
     case storage.ack(ref, job, outcome, Config.now(config)) do
       {:ok, %{job: acked, released: released, cancelled: cancelled}} ->
-        :telemetry.execute([:capstan, :job, :stop], %{}, %{job: acked, name: config.name})
+        :telemetry.execute(
+          [:capstan, :job, :stop],
+          %{duration: System.monotonic_time() - started},
+          %{job: acked, name: config.name, state: acked.state}
+        )
 
         broadcast_terminal(config, [acked | cancelled])
         poke_released(config, released)
@@ -44,6 +58,36 @@ defmodule Capstan.Runner do
         {:error, :stale}
     end
   end
+
+  # Workers with a `timeout:` run in a linked inner task so a hung run can be
+  # cut off; the timeout is handled like any other error (retry, then fail).
+  defp run_worker(module, ctx) do
+    case module.__capstan_defaults__()[:timeout] do
+      nil ->
+        module.run(ctx)
+
+      timeout ->
+        task =
+          Task.async(fn ->
+            try do
+              {:returned, module.run(ctx)}
+            catch
+              :throw, {:capstan_control, control} -> {:control, control}
+            end
+          end)
+
+        case Task.yield(task, timeout_ms(timeout)) || Task.shutdown(task, :brutal_kill) do
+          {:ok, {:returned, value}} -> value
+          {:ok, {:control, control}} -> throw({:capstan_control, control})
+          {:exit, reason} -> exit(reason)
+          nil -> {:error, :timeout}
+        end
+    end
+  end
+
+  defp timeout_ms(seconds) when is_integer(seconds), do: seconds * 1_000
+  defp timeout_ms({n, :second}), do: n * 1_000
+  defp timeout_ms({n, :millisecond}), do: n
 
   # -- Return mapping -----------------------------------------------------------
 
@@ -89,7 +133,8 @@ defmodule Capstan.Runner do
       job: job,
       name: config.name,
       kind: kind,
-      reason: reason
+      reason: reason,
+      stacktrace: stacktrace
     })
 
     retry_or_fail(config, job, %{"error" => formatted})
@@ -116,17 +161,20 @@ defmodule Capstan.Runner do
     end
   end
 
-  # -- Ctx APIs (called via Capstan.step/await/sleep/steering) ------------------
+  # -- Steps --------------------------------------------------------------------
 
   @max_step_bytes 1024 * 1024
 
-  def step(%Ctx{job: job, config: config}, name, fun, opts) do
+  def step(%Ctx{job: job, config: config} = ctx, name, fun, opts) do
     name = to_string(name)
     {storage, ref} = config.storage_ref
 
     case storage.get_step(ref, job.id, name) do
       {:ok, bin} ->
         :erlang.binary_to_term(bin)
+
+      :none when ctx.replay? ->
+        throw({:capstan_replay, {:missing_step, name}})
 
       :none ->
         check_cancel!(config, job)
@@ -149,7 +197,9 @@ defmodule Capstan.Runner do
     end
   end
 
-  def await(%Ctx{job: job, config: config}, name, opts) do
+  # -- Signals ------------------------------------------------------------------
+
+  def await(%Ctx{job: job, config: config} = ctx, name, opts) do
     name = to_string(name)
     {storage, ref} = config.storage_ref
     scopes = signal_scopes(job, opts)
@@ -157,6 +207,9 @@ defmodule Capstan.Runner do
     case storage.get_signal(ref, scopes, name) do
       {:ok, payload} ->
         payload
+
+      :none when ctx.replay? ->
+        throw({:capstan_replay, {:blocked_on_signal, name}})
 
       :none ->
         if job.await_name == name and deadline_passed?(job, config) do
@@ -173,8 +226,8 @@ defmodule Capstan.Runner do
     end
   end
 
-  # Durable sleep: the wake target is memoized as a step, so replays past it
-  # and resumes after it, no matter how many times the job restarts.
+  # Durable sleep: the wake target is memoized as a step, so replays pass it
+  # and resumes continue after it, no matter how many times the job restarts.
   def sleep(%Ctx{config: config} = ctx, name, seconds)
       when is_integer(seconds) and seconds >= 0 do
     target =
@@ -183,7 +236,7 @@ defmodule Capstan.Runner do
 
     now = Config.now(config)
 
-    if DateTime.compare(now, target) == :lt do
+    if DateTime.compare(now, target) == :lt and not ctx.replay? do
       throw({:capstan_control, {:sleep, max(DateTime.diff(target, now, :second), 1)}})
     end
 
@@ -196,6 +249,111 @@ defmodule Capstan.Runner do
     case storage.get_signal(ref, signal_scopes(job, []), "$steer") do
       {:ok, payload} -> payload
       :none -> nil
+    end
+  end
+
+  # -- Dynamic children ---------------------------------------------------------
+
+  # Spawning is memoized as a step, so a crash-and-retry after spawning cannot
+  # duplicate children.
+  def spawn_child(%Ctx{} = ctx, name, {Capstan.Worker, worker, input, opts}) do
+    step(ctx, "$spawn:#{name}", fn ->
+      {:ok, job} =
+        Capstan.insert(
+          ctx.capstan,
+          {Capstan.Worker, worker, input, Keyword.put(opts, :parent_id, ctx.job.id)}
+        )
+
+      job.id
+    end, [])
+  end
+
+  def spawn_many(%Ctx{} = ctx, name, buildables) do
+    step(ctx, "$spawn:#{name}", fn ->
+      buildables
+      |> Enum.map(fn {Capstan.Worker, worker, input, opts} ->
+        {Capstan.Worker, worker, input, Keyword.put(opts, :parent_id, ctx.job.id)}
+      end)
+      |> then(&Capstan.insert_all(ctx.capstan, &1))
+      |> Enum.map(& &1.id)
+    end, [])
+  end
+
+  # Park (at zero cost) until every spawned child is terminal, then return
+  # them ordered by id. Re-checks on every wake, so late spawns are safe as
+  # long as they happen before the await.
+  def await_children(%Ctx{job: job, config: config} = ctx) do
+    {storage, ref} = config.storage_ref
+    {:ok, children} = storage.children(ref, job.id)
+
+    cond do
+      children != [] and Enum.all?(children, &Job.terminal?/1) ->
+        children
+
+      ctx.replay? ->
+        throw({:capstan_replay, {:blocked_on_children, length(children)}})
+
+      true ->
+        # Drop any stale completion signal, then re-check before parking: a
+        # child finishing in between will have re-signalled, and the engine's
+        # park-and-wake check closes the final gap.
+        storage.clear_signal(ref, "job:#{job.id}", "$children")
+
+        {:ok, children} = storage.children(ref, job.id)
+
+        if children != [] and Enum.all?(children, &Job.terminal?/1) do
+          children
+        else
+          throw({:capstan_control, {:await, "job:#{job.id}", "$children", nil}})
+        end
+    end
+  end
+
+  # -- Events -------------------------------------------------------------------
+
+  def emit(%Ctx{replay?: true}, _payload), do: {:ok, :replayed}
+
+  def emit(%Ctx{job: job, config: config}, payload) when is_map(payload) do
+    {storage, ref} = config.storage_ref
+
+    {:ok, seq} = storage.append_event(ref, job.id, payload, Config.now(config))
+
+    Registry.dispatch(Capstan.run_registry(config.name), {:events, job.id}, fn entries ->
+      for {pid, _} <- entries, do: send(pid, {:capstan_event, job.id, seq, payload})
+    end)
+
+    {:ok, seq}
+  rescue
+    ArgumentError -> {:ok, :no_registry}
+  end
+
+  # -- Resource debits (post-hoc rate true-up) ----------------------------------
+
+  def debit(%Ctx{replay?: true}, _resource, _units), do: :ok
+
+  def debit(%Ctx{job: job, config: config}, resource, units) when is_integer(units) do
+    spec = Config.queue_spec(config, job.queue)
+
+    case spec.rate do
+      %{resource: ^resource, period: period, estimate: estimate} ->
+        {storage, ref} = config.storage_ref
+
+        # The claim already debited the estimate; credit it back exactly once
+        # per execution so the window converges on actual usage.
+        credit =
+          if Process.get({:capstan_credited, job.id}) do
+            0
+          else
+            Process.put({:capstan_credited, job.id}, true)
+            estimate
+          end
+
+        storage.debit_rate(ref, "resource:" <> resource, period, units - credit,
+          Config.now(config))
+
+      _ ->
+        raise ArgumentError,
+              "queue #{job.queue} has no rate resource #{inspect(resource)} configured"
     end
   end
 

@@ -24,7 +24,7 @@ defmodule Capstan.Producer do
 
     :pg.join(Capstan.pg_scope(config.name), {:producers, queue}, self())
 
-    state = %{config: config, queue: queue, spec: spec, running: %{}}
+    state = %{config: config, queue: queue, spec: spec, running: %{}, paused: false}
 
     {:ok, schedule_poll(state), {:continue, :claim}}
   end
@@ -39,6 +39,10 @@ defmodule Capstan.Producer do
 
   def handle_info(:poke, state), do: {:noreply, claim(state)}
 
+  def handle_info(:capstan_pause, state), do: {:noreply, %{state | paused: true}}
+
+  def handle_info(:capstan_resume, state), do: {:noreply, claim(%{state | paused: false})}
+
   # A job task finished; free the slot and immediately look for more work.
   def handle_info({ref, _result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
@@ -49,6 +53,8 @@ defmodule Capstan.Producer do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     {:noreply, claim(%{state | running: Map.delete(state.running, ref)})}
   end
+
+  defp claim(%{paused: true} = state), do: state
 
   defp claim(%{config: config, spec: spec} = state) do
     demand = spec.local_limit - map_size(state.running)
@@ -169,6 +175,13 @@ defmodule Capstan.Sweeper do
       for {queue, _spec} <- config.queues, do: Capstan.poke(config, queue)
     end
 
+    # Retention: terminal jobs age out with their steps and events; signals
+    # expire on their TTL; rate windows older than a day are dead weight.
+    for {state, keep} <- config.retention, is_integer(keep) do
+      storage.prune_jobs(ref, state, now, keep, 500)
+    end
+
+    storage.prune_signals(ref, now, config.signal_ttl)
     storage.prune_rate(ref, DateTime.to_unix(now) - 86_400)
 
     {:noreply, schedule(config)}

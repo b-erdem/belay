@@ -36,6 +36,9 @@ defmodule Capstan.Job do
     :wf_ignore,
     :cron_name,
     :cron_slot,
+    :unique_key,
+    :unique_mode,
+    :parent_id,
     :budget_usd_micros,
     :budget_tokens,
     :spent_usd_micros,
@@ -45,7 +48,8 @@ defmodule Capstan.Job do
     :cancel_requested,
     :inserted_at,
     :started_at,
-    :finished_at
+    :finished_at,
+    duplicate?: false
   ]
 
   @type t :: %__MODULE__{}
@@ -73,12 +77,18 @@ defmodule Capstan.Job do
   def new(worker, input, opts, defaults) do
     now = Keyword.fetch!(opts, :now)
     budget = Keyword.get(opts, :budget, [])
+    {unique_key, unique_mode} = unique_fields(Keyword.get(opts, :unique), now)
+
+    input = Capstan.InputSchema.validate!(worker, defaults[:input_schema], input)
 
     %{
       kind: worker |> to_string() |> String.replace_prefix("Elixir.", ""),
       queue: to_string(Keyword.get(opts, :queue, defaults[:queue] || "default")),
       state: Keyword.get(opts, :state, "ready"),
       input: input,
+      unique_key: unique_key,
+      unique_mode: unique_mode,
+      parent_id: Keyword.get(opts, :parent_id),
       meta: Keyword.get(opts, :meta, %{}),
       priority: Keyword.get(opts, :priority, 0),
       attempt: 0,
@@ -108,6 +118,26 @@ defmodule Capstan.Job do
     end
   end
 
+  # `unique: "key"` holds while a job with the key is incomplete;
+  # `unique: [key: k, within: seconds]` dedupes per fixed time window
+  # regardless of outcome (the window bucket becomes part of the key).
+  defp unique_fields(nil, _now), do: {nil, nil}
+  defp unique_fields(key, _now) when is_binary(key), do: {key, "incomplete"}
+
+  defp unique_fields(opts, now) when is_list(opts) do
+    key = Keyword.fetch!(opts, :key)
+
+    case Keyword.get(opts, :within) do
+      nil ->
+        {key, "incomplete"}
+
+      seconds when is_integer(seconds) and seconds > 0 ->
+        bucket = now |> DateTime.to_unix() |> div(seconds)
+
+        {"#{key}@#{bucket}", "window"}
+    end
+  end
+
   defp opt_string(nil), do: nil
   defp opt_string(value), do: to_string(value)
 
@@ -118,10 +148,12 @@ end
 defmodule Capstan.Ctx do
   @moduledoc """
   Execution context passed to `c:Capstan.Worker.run/1`. Carries the job and
-  everything the step/signal/budget APIs need.
+  everything the step/signal/budget APIs need. `replay?: true` marks a
+  `Capstan.Replay` dry run: memoized reads succeed, side effects are inert,
+  and anything unrecorded halts with a precise report.
   """
 
-  defstruct [:job, :capstan, :config]
+  defstruct [:job, :capstan, :config, replay?: false]
 
   @type t :: %__MODULE__{job: Capstan.Job.t()}
 end

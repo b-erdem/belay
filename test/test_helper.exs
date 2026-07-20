@@ -6,7 +6,7 @@ if Application.get_env(:capstan, :test_storage) == :postgres do
   url = Application.fetch_env!(:capstan, :test_pg_url)
 
   Capstan.Storage.Postgres.ensure_database!(url)
-  Capstan.Storage.Postgres.migrate!(url)
+  Capstan.Storage.Postgres.reset!(url)
 end
 
 ExUnit.start()

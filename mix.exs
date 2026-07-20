@@ -1,7 +1,7 @@
 defmodule Capstan.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "1.0.0-rc.1"
   @source_url "https://github.com/bariserdem/capstan"
 
   def project do
@@ -14,10 +14,30 @@ defmodule Capstan.MixProject do
       deps: deps(),
       name: "Capstan",
       description:
-        "A standalone, agent-native durable job engine for Elixir on Postgres: " <>
-          "memoized steps with cost budgets, signals, workflows, leases, and leaderless scheduling.",
+        "An agent-native durable job engine for Elixir on Postgres: memoized steps " <>
+          "with cost budgets, signals, dynamic child jobs, event streams, replay " <>
+          "debugging, token-aware rate limits, and an MCP server — leaderless, no Ecto.",
       package: package(),
-      docs: [main: "Capstan", source_url: @source_url]
+      docs: docs()
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_url: @source_url,
+      extras: [
+        "README.md",
+        "guides/getting-started.md",
+        "guides/durable-steps.md",
+        "guides/agents.md",
+        "guides/operations.md",
+        "guides/testing.md",
+        "guides/comparison.md",
+        "DESIGN.md",
+        "CHANGELOG.md"
+      ],
+      groups_for_extras: [Guides: ~r/guides\/.*/]
     ]
   end
 
@@ -40,7 +60,8 @@ defmodule Capstan.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => @source_url}
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib guides mix.exs README.md DESIGN.md CHANGELOG.md LICENSE)
     ]
   end
 end

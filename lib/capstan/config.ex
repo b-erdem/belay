@@ -12,7 +12,9 @@ defmodule Capstan.Config do
             lease_ttl: 30_000,
             sweep_interval: 5_000,
             cron_interval: 20_000,
-            shutdown_grace: 5_000
+            shutdown_grace: 15_000,
+            retention: %{},
+            signal_ttl: 604_800
 
   @type t :: %__MODULE__{}
 
@@ -29,8 +31,19 @@ defmodule Capstan.Config do
       poll_interval: Keyword.get(opts, :poll_interval, 500),
       lease_ttl: Keyword.get(opts, :lease_ttl, 30_000),
       sweep_interval: Keyword.get(opts, :sweep_interval, 5_000),
-      cron_interval: Keyword.get(opts, :cron_interval, 20_000)
+      cron_interval: Keyword.get(opts, :cron_interval, 20_000),
+      shutdown_grace: Keyword.get(opts, :shutdown_grace, 15_000),
+      retention: normalize_retention(Keyword.get(opts, :retention, [])),
+      signal_ttl: Keyword.get(opts, :signal_ttl, 604_800)
     }
+  end
+
+  @default_retention %{"succeeded" => 86_400, "failed" => 604_800, "cancelled" => 604_800}
+
+  defp normalize_retention(opts) do
+    Enum.reduce(opts, @default_retention, fn {state, keep}, acc ->
+      Map.put(acc, to_string(state), keep)
+    end)
   end
 
   def now(%__MODULE__{clock: clock}), do: Capstan.Clock.now(clock)
@@ -86,7 +99,15 @@ defmodule Capstan.Config do
   defp normalize_rate(nil), do: nil
 
   defp normalize_rate(opts) do
-    %{allowed: Keyword.fetch!(opts, :allowed), period: Keyword.fetch!(opts, :period)}
+    %{
+      allowed: Keyword.fetch!(opts, :allowed),
+      period: Keyword.fetch!(opts, :period),
+      # A shared resource bucket (e.g. "anthropic") makes the limit span every
+      # queue that names it; :estimate is the per-job admission cost in
+      # resource units, corrected post-hoc via Capstan.debit/3.
+      resource: Keyword.get(opts, :resource),
+      estimate: Keyword.get(opts, :estimate, 1)
+    }
   end
 
   defp normalize_partition(nil), do: nil

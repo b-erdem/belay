@@ -51,6 +51,17 @@ defmodule Capstan.Storage do
   @callback request_cancel(ref, integer(), now) ::
               {:ok, %{status: :cancelled | :requested | :noop, cancelled: [Job.t()], released: [Job.t()]}}
   @callback workflow_jobs(ref, String.t()) :: {:ok, [Job.t()]}
+  @callback get_by_unique_key(ref, String.t()) :: {:ok, Job.t()} | :error
+  @callback children(ref, integer()) :: {:ok, [Job.t()]}
+  @callback append_event(ref, integer(), map(), now) :: {:ok, seq :: integer()}
+  @callback list_events(ref, integer(), after_seq :: integer()) :: {:ok, [map()]}
+  @callback queue_stats(ref) :: {:ok, [%{queue: String.t(), state: String.t(), count: integer()}]}
+  @callback list_jobs(ref, map()) :: {:ok, [Job.t()]}
+  @callback retry(ref, integer(), now) :: {:ok, Job.t()} | {:error, :not_retryable | :not_found}
+  @callback prune_jobs(ref, state :: String.t(), now, keep_seconds :: integer(), limit :: pos_integer()) ::
+              {:ok, non_neg_integer()}
+  @callback prune_signals(ref, now, ttl_seconds :: integer()) :: :ok
+  @callback debit_rate(ref, bucket :: String.t(), period :: pos_integer(), amount :: integer(), now) :: :ok
   @callback prune_rate(ref, before_unix :: integer()) :: :ok
 end
 
@@ -117,14 +128,22 @@ defmodule Capstan.Storage.Logic do
     end)
   end
 
-  @doc "Sliding-window allowance: current window plus overlap-weighted previous."
+  @doc """
+  Sliding-window allowance: current window plus overlap-weighted previous.
+  Capped at `allowed` so post-hoc credits (actual usage below the estimate)
+  can't inflate the window beyond its configured budget.
+  """
   def rate_allowance(prev_count, curr_count, allowed, period, now_unix) do
     win = window_start(now_unix, period)
     elapsed_frac = (now_unix - win) / period
     used = curr_count + round(prev_count * (1.0 - elapsed_frac))
 
-    max(allowed - used, 0)
+    allowed |> min(allowed - used) |> max(0)
   end
+
+  @doc "The rate-counter bucket for a queue's rate spec."
+  def rate_bucket(%{resource: nil}, queue), do: "queue:" <> queue
+  def rate_bucket(%{resource: resource}, _queue), do: "resource:" <> resource
 
   def window_start(now_unix, period), do: div(now_unix, period) * period
 
