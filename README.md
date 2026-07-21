@@ -23,7 +23,7 @@ no separate service. Apache-2.0.
 
 ```elixir
 # mix.exs
-{:capstan, "~> 1.0.0-rc.4"}
+{:capstan, "~> 1.0.0-rc.5"}
 
 # once, at deploy time (idempotent)
 Capstan.Storage.Postgres.migrate!(db_url)
@@ -112,23 +112,20 @@ layers:
 #    crash/retry windows — not even kill -9 mid-failure buys an extra step).
 MyApp.ResearchPipeline.new(input, budget: [usd: 1.00])
 
-# 2. Fleet-wide caps per window — resource buckets span every queue that
-#    names them. Units are yours: tokens... or cents.
+# 2. Fleet-wide cap per window — a resource bucket spans every queue that
+#    names it. Units are yours: tokens, or cents for an app-wide $/day cap.
 queues: [
   ai: [limit: 20,
-       rate: [resource: "anthropic_tokens", allowed: 2_000_000, period: 60, estimate: 3_000]],
-  enrich: [limit: 10,
-       rate: [resource: "spend_cents", allowed: 5_000, period: 86_400, estimate: 2]]
+       rate: [resource: "anthropic_tokens", allowed: 2_000_000, period: 60, estimate: 3_000]]
 ]
-# ^ that second line caps the whole app at $50/day. When the window is
-#   spent, claims stop; work queues instead of billing.
+# When the window is spent, claims stop; work queues instead of billing.
 
-# 3. True-up — estimates are corrected by actuals, so windows converge on
-#    what the invoice will actually say:
+# 3. True-up — the claim debits the estimate; inside the job you correct it
+#    with actuals, so the window converges on what the invoice will say.
+#    A job debits its own queue's resource:
 Capstan.step(ctx, :summarize, fn ->
   %{text: text, usage: usage} = llm!(prompt)
   Capstan.debit(ctx, "anthropic_tokens", usage.total_tokens)
-  Capstan.debit(ctx, "spend_cents", usage.cost_cents)
   text
 end, cost: [usd: 0.02])
 ```
@@ -198,10 +195,10 @@ Numbers from this repo's reproducible harnesses on a laptop (Postgres 16):
 | Dispatch, same node | **8.6ms** p50 insert→result | `bench/run.sh` |
 | Dispatch, cross-process + `pg_notify` | **11.0ms** p50 / 24.5ms p99 | `bench/run.sh` |
 | Throughput (unbatched acks, 3 workers) | ~416 jobs/s end-to-end | `bench/throughput.exs` |
-| Endurance soak (7h) | 99,004 jobs · 4,978 `kill -9` · 13 DB restarts · **13/13 invariants** | `soak/run.sh` → reports in `soak/reports/` |
+| Endurance soak (7h) | 99,004 jobs · 4,978 `kill -9` · 13 DB restarts — surfaced one real bug (below); **13/13 invariants** on the post-fix revalidation | `soak/run.sh` → reports in `soak/reports/` |
 | Model checking | **187,975,659 distinct states, zero violations** (TLC, complete to depth 49) | `verify/spec/` |
 | Schedule exploration | READ COMMITTED wake race reproduced + fix proven across 400 schedules | `verify/wake_protocol/` |
-| Suites | 115 (memory) + 125 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
+| Suites | 119 (memory) + 129 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
 
 Six real bugs were found by these harnesses before any user could: two by
 the chaos soak (a READ COMMITTED wake race among them), one by the 7-hour

@@ -11,7 +11,7 @@ defmodule Capstan.Job do
     * `"running"` — claimed under a lease
     * `"held"` — created but ineligible (unmet workflow deps, operator hold)
     * `"succeeded"` / `"failed"` / `"cancelled"` — terminal
-    * `"paused"` — operator freeze, resumable
+    * `"paused"` — reserved for operator freezes of parked jobs
   """
 
   defstruct [
@@ -289,7 +289,7 @@ defmodule Capstan.Worker do
       @doc false
       def __capstan_defaults__, do: @capstan_defaults
 
-      @doc "Build insert attrs for this worker (used by `Capstan.insert/4`)."
+      @doc "Build insert attrs for this worker (used by `Capstan.insert/2`)."
       def new(input, opts \\ []) do
         {unquote(__MODULE__), __MODULE__, input, opts}
       end

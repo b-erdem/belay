@@ -33,3 +33,4 @@ verify/spec/states/
 verify/spec/*.log
 verify/spec/mutations/states/
 tmp/
+verify/spec/*.log

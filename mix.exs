@@ -1,7 +1,7 @@
 defmodule Capstan.MixProject do
   use Mix.Project
 
-  @version "1.0.0-rc.4"
+  @version "1.0.0-rc.5"
   @source_url "https://github.com/b-erdem/capstan"
 
   def project do
@@ -26,6 +26,7 @@ defmodule Capstan.MixProject do
     [
       main: "readme",
       source_url: @source_url,
+      assets: %{"assets" => "assets"},
       extras: [
         "README.md",
         "guides/getting-started.md",
@@ -35,6 +36,7 @@ defmodule Capstan.MixProject do
         "guides/operations.md",
         "guides/testing.md",
         "guides/comparison.md",
+        {"verify/README.md", filename: "formal-verification", title: "Formal verification"},
         "DESIGN.md",
         "SCHEMA.md",
         "CONTRIBUTING.md",

@@ -1,15 +1,20 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-rc.5 — 2026-07-21
+
+Launch-prep release: formal verification layer, chunk workers, adaptive
+concurrency, the Oban migrator, dashboard v2, and the fixes surfaced by a
+pre-launch adversarial review.
 
 ### Added
 - **Formal verification layer (`verify/`).** A TLA+ model of the
   durable-execution core (journaling, budgets, cooperative cancel,
   crash/reclaim, settlement), generated from source + execution traces and
-  exhaustively checked by TLC — 1,525,104 distinct states, zero violations.
-  Validated by mutation: reverting either known production bug in the model
-  (the budget crash window; the cancel-request clear) yields a TLC
-  counterexample matching the real-world failure step for step.
+  exhaustively checked by TLC — 187,975,659 distinct states (depth 49),
+  zero violations. Validated by mutation: reverting any of the three known
+  production bugs in the model (the budget crash window; the cancel-request
+  clear; the operator-retry semantics) yields a TLC counterexample matching
+  the real-world failure step for step.
 - **Schedule-explored wake protocol (`verify/wake_protocol/`).** The
   parent-wake protocol under Lockstep controlled concurrency: the pre-fix
   count-gated protocol loses the wake on a found, saved, replayable

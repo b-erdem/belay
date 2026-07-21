@@ -19,7 +19,7 @@ constraint into a design decision:
 | Stager ticks 1s on the leader | **No staging step** — the claim query itself checks `ready_at <= $now`; sub-second scheduling by construction |
 | Cron/Stager/Lifeline run on an elected leader ("rare, but insidious" failures) | **Leaderless everything** — cron dedupes via a unique `(cron_name, cron_slot)` index; lease reclaim is idempotent row-level UPDATE; there is no peer election in the codebase |
 | Lifeline rescues orphans after 1h and "may cause duplicate execution" | **Leases with fencing** (§5): running jobs hold a `lease_until` renewed in batch; orphan window = lease TTL (~30s), acks are fenced by attempt number |
-| LISTEN/NOTIFY load-bearing (breaks under PgBouncer/serverless PG) | **Poll-first dispatch** (§6): 500ms jittered claims + in-cluster `:pg` broadcast when distributed; Postgres NOTIFY is not used at all |
+| LISTEN/NOTIFY load-bearing (breaks under PgBouncer/serverless PG) | **Poll-first dispatch** (§6): jittered claims + in-cluster `:pg` broadcast when distributed. Postgres NOTIFY is never load-bearing; an opt-in `pg_notify` accelerator landed in rc.3, with polling as the correctness floor |
 | Args are JSON; step values bolted on | **JSON inputs, term-native step values**, `result` and step `value` as `bytea` term binaries with cost columns beside them |
 | Ecto + Oban dependency graph | **Postgrex + Jason + telemetry only**; storage behind a behaviour with a deterministic in-memory adapter |
 
@@ -166,7 +166,9 @@ Time comes from a `Capstan.Clock` behaviour (`System` / `Sim`). Rate windows,
 backoff, lease expiry, await deadlines, and cron slots are all tested by
 advancing a SimClock, never by sleeping.
 
-## 8. Only possible because we own the engine (roadmap)
+## 8. What owning the engine unlocked
+
+*Written as a roadmap in the v2 design; all of it shipped across rc.1–rc.4.*
 
 - **Dynamic spawn/graft**: `Capstan.spawn_child(ctx, kind, input)` — agents
   author their own DAGs at runtime (the Cloudflare Dynamic Workflows idea, on

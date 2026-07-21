@@ -37,8 +37,9 @@ encodings discriminated by the first byte:
 | anything else | UTF-8 JSON | every other SDK (MUST) |
 
 JSON never begins with byte 131, so the discriminator is exact. All SDKs
-MUST decode both (foreign ETF MAY be surfaced as opaque bytes). Values are
-limited to 1 MiB. Reserved step values (`$sleep:*`, `$spawn:*`, §9) are
+MUST decode both (foreign ETF MAY be surfaced as opaque bytes). Step values
+are limited to 1 MiB (the reference enforces this on `capstan_steps.value`;
+job results are not size-capped). Reserved step values (`$sleep:*`, `$spawn:*`, §9) are
 SDK-internal: never interpret a foreign SDK's reserved values.
 
 `input`, `meta`, `errors`, signal/event payloads are `jsonb`. Timestamps are
@@ -341,7 +342,7 @@ notifications); envelope decoding both ways.
 **Worker SDK**: all of §§5–9. Verify with the language-agnostic harness in
 `soak/`: point `soak/run.sh` at your worker binary instead of
 `soak/worker.exs` (implement the eight soak worker kinds), and the driver —
-which only reads the database — checks the thirteen invariants (§11) under
+which only reads the database — checks the normative invariants (§11) under
 `kill -9` and database restarts. A worker SDK is conformant when the soak
 passes.
 
