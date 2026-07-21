@@ -184,7 +184,18 @@ defmodule Capstan.Dashboard do
   defp authorized_request?(%{token: nil}, _query, _headers), do: true
 
   defp authorized_request?(%{token: token}, query, headers) do
-    query["token"] == token or Map.get(headers, "authorization") == "Bearer " <> token
+    presented = query["token"] || strip_bearer(Map.get(headers, "authorization"))
+    is_binary(presented) and secure_equal?(presented, token)
+  end
+
+  defp strip_bearer("Bearer " <> rest), do: rest
+  defp strip_bearer(_), do: nil
+
+  # Constant-time comparison via fixed-length digests: hashing equalizes
+  # length (hiding the token length) and makes the residual per-byte timing
+  # of `==` reveal only digest bytes, which are preimage-resistant.
+  defp secure_equal?(a, b) do
+    :crypto.hash(:sha256, a) == :crypto.hash(:sha256, b)
   end
 
   # -- Routes -------------------------------------------------------------------

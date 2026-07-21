@@ -181,19 +181,25 @@ defmodule Capstan.Runner do
         fun.()
 
       timeout ->
+        # The inner task is linked, so it must catch EVERY class — a bare
+        # raise/exit/throw would otherwise kill this runner before yield
+        # returns (the job would sit leased until the sweeper reclaims it,
+        # with no error journaled). We capture the failure and re-raise it
+        # in the caller, where execute/2's own try maps it to an outcome.
         task =
           Task.async(fn ->
             try do
               {:returned, fun.()}
             catch
               :throw, {:capstan_control, control} -> {:control, control}
+              kind, reason -> {:caught, kind, reason, __STACKTRACE__}
             end
           end)
 
         case Task.yield(task, timeout_ms(timeout)) || Task.shutdown(task, :brutal_kill) do
           {:ok, {:returned, value}} -> value
           {:ok, {:control, control}} -> throw({:capstan_control, control})
-          {:exit, reason} -> exit(reason)
+          {:ok, {:caught, kind, reason, stack}} -> :erlang.raise(kind, reason, stack)
           nil -> {:error, :timeout}
         end
     end
@@ -421,7 +427,14 @@ defmodule Capstan.Runner do
     {:ok, children} = storage.children(ref, job.id)
 
     cond do
-      children != [] and Enum.all?(children, &Job.terminal?/1) ->
+      # Children are inserted synchronously by spawn_many before this runs,
+      # so an empty set means none were spawned (or a fan-out of zero) —
+      # there is nothing to await. Parking here would hang forever, since
+      # the resettle_parents backstop needs children to exist to fire.
+      children == [] ->
+        []
+
+      Enum.all?(children, &Job.terminal?/1) ->
         children
 
       ctx.replay? ->

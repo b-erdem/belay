@@ -480,3 +480,28 @@ defmodule Capstan.Test.Sleeper do
     :ok
   end
 end
+
+defmodule Capstan.Test.RaisingTimeout do
+  @moduledoc false
+  # A worker with timeout: set whose body raises — the runner must map the
+  # raise to a normal failure/retry, not let it crash the executor.
+  use Capstan.Worker, queue: :default, max_attempts: 2, timeout: {5, :second}
+
+  @impl Capstan.Worker
+  def run(_ctx), do: raise("boom under timeout")
+
+  @impl Capstan.Worker
+  def backoff(_attempt), do: 5
+end
+
+defmodule Capstan.Test.EmptyFanOut do
+  @moduledoc false
+  # Fans out zero children — must not park the parent forever.
+  use Capstan.Worker, queue: :default
+
+  @impl Capstan.Worker
+  def run(ctx) do
+    [] = Capstan.map_children(ctx, :none, Capstan.Test.Echo, [])
+    {:ok, %{"children" => 0}}
+  end
+end

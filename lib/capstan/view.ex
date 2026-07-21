@@ -42,7 +42,6 @@ defmodule Capstan.View do
       "input" => job.input,
       "meta" => job.meta,
       "errors" => job.errors,
-      "max_attempts" => job.max_attempts,
       "ready_at" => iso(job.ready_at),
       "await" => job.await_name && %{"scope" => job.await_scope, "name" => job.await_name},
       "spent" => %{"usd_micros" => job.spent_usd_micros, "tokens" => job.spent_tokens},

@@ -51,12 +51,18 @@ defmodule Capstan.Migrate.Oban do
         [@pending]
       )
 
-    %{rows: [[already]]} =
-      Postgrex.query!(
-        conn,
-        "SELECT count(*) FROM capstan_jobs WHERE meta ? 'migrated_from_oban_id'",
-        []
-      )
+    # The dry run is exactly the command people run before Capstan's schema
+    # exists, so a missing capstan_jobs table reports "none migrated yet"
+    # rather than crashing with a raw undefined_table error.
+    already =
+      case Postgrex.query(
+             conn,
+             "SELECT count(*) FROM capstan_jobs WHERE meta ? 'migrated_from_oban_id'",
+             []
+           ) do
+        {:ok, %{rows: [[n]]}} -> n
+        {:error, %Postgrex.Error{postgres: %{code: :undefined_table}}} -> 0
+      end
 
     workers =
       Enum.map(worker_rows, fn [worker, queue, n] ->

@@ -132,6 +132,14 @@ defmodule Capstan.Dashboard.Page do
   const j = async (p, opts) => { const r = await fetch(auth(p), opts); return r.json(); };
   const post = (p, body) => j(p, {method:'POST', body: JSON.stringify(body || {})});
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  // For values interpolated into a JS string literal inside an inline
+  // handler (onclick="f('HERE')"). esc alone leaves ' unescaped, which
+  // breaks out of the JS string; hex-escaping every non-word char is
+  // bulletproof in both the HTML-attribute and JS-string layers.
+  const jstr = s => String(s ?? '').replace(/[^\w]/g, c => {
+    const h = c.charCodeAt(0);
+    return h < 256 ? '\\x' + h.toString(16).padStart(2, '0') : '\\u' + h.toString(16).padStart(4, '0');
+  });
   const badge = s => `<span class="badge b-${esc(s)}">${esc(s)}</span>`;
   const money = m => '$' + (m / 1e6).toFixed(m >= 1e6 ? 2 : 4);
   const rel = t => {
@@ -239,7 +247,7 @@ defmodule Capstan.Dashboard.Page do
   function rowsHtml(jobs) {
     if (!jobs.length) return '<div class="empty">no jobs</div>';
     return jobs.map(x => {
-      const wf = x.workflow ? `<a onclick="event.stopPropagation();openWorkflow('${esc(x.workflow.id)}')">${esc(x.workflow.name || 'dag')}</a> · ` : '';
+      const wf = x.workflow ? `<a onclick="event.stopPropagation();openWorkflow('${jstr(x.workflow.id)}')">${esc(x.workflow.name || 'dag')}</a> · ` : '';
       const cost = x.spent_usd_micros > 0 ? `<span class="cost">${money(x.spent_usd_micros)}</span>` : '';
       const d = dur(x);
       return `<div class="job" onclick="openJob(${x.id})">
@@ -287,8 +295,8 @@ defmodule Capstan.Dashboard.Page do
         <button onclick="act(${d.id},'retry')">retry</button>
         <button class="danger" onclick="act(${d.id},'cancel')">cancel</button>
         <button onclick="steer(${d.id})">steer</button>
-        ${d.await ? `<button onclick="signal('${esc(d.await.scope)}','${esc(d.await.name)}')">signal ${esc(d.await.name)}</button>` : ''}
-        ${d.workflow ? `<button onclick="openWorkflow('${esc(d.workflow.id)}')">workflow dag</button>` : ''}
+        ${d.await ? `<button onclick="signal('${jstr(d.await.scope)}','${jstr(d.await.name)}')">signal ${esc(d.await.name)}</button>` : ''}
+        ${d.workflow ? `<button onclick="openWorkflow('${jstr(d.workflow.id)}')">workflow dag</button>` : ''}
       </div>
       <section><h4>input</h4><pre>${esc(JSON.stringify(d.input, null, 2))}</pre></section>
       ${d.result ? `<section><h4>result</h4><pre>${esc(d.result)}</pre></section>` : ''}

@@ -22,6 +22,10 @@ defmodule Capstan.Codec do
 
   @doc "Decode a stored value: ETF or JSON by the leading-byte discriminator."
   def decode(nil), do: nil
-  def decode(<<@etf_tag, _rest::binary>> = binary), do: :erlang.binary_to_term(binary)
+  # `:safe` blocks new-atom creation and other unsafe constructs, so a
+  # crafted ETF payload in these columns (they may be written by a foreign
+  # SDK) can't exhaust the atom table or build dangerous terms. Values are
+  # data by contract — no pids/refs/funs — so this rejects nothing legitimate.
+  def decode(<<@etf_tag, _rest::binary>> = binary), do: :erlang.binary_to_term(binary, [:safe])
   def decode(binary) when is_binary(binary), do: Jason.decode!(binary)
 end

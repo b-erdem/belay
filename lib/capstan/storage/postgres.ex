@@ -58,6 +58,8 @@ defmodule Capstan.Storage.Postgres do
   # -- Inserting ----------------------------------------------------------------
 
   @impl Capstan.Storage
+  def insert_jobs(_ref, [], _now), do: {:ok, []}
+
   def insert_jobs(ref, rows, _now) do
     {sql, params} = build_insert(rows)
 
@@ -141,7 +143,7 @@ defmodule Capstan.Storage.Postgres do
                 UPDATE capstan_jobs
                 SET state = 'running', attempt = attempt + 1, lease_until = $2,
                     leased_by = $3, started_at = COALESCE(started_at, $4)
-                WHERE id = ANY($1)
+                WHERE id = ANY($1) AND state IN ('ready', 'awaiting')
                 RETURNING *
                 """,
                 [ids, lease_until, node_id, now]

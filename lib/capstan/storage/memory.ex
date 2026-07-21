@@ -345,10 +345,17 @@ defmodule Capstan.Storage.Memory do
         spent_tokens: (job.spent_tokens || 0) + step.tokens
     }
 
+    # Journaled step values are immutable: a duplicate (job_id, name) — a
+    # zombie executor finishing its body after its lease was reclaimed —
+    # keeps the first value, mirroring Postgres's ON CONFLICT DO NOTHING.
+    # The spend increment still applies (matches Postgres, conservative
+    # direction).
+    exists? = Map.has_key?(state.steps, {job_id, name})
+
     state = %{
       state
-      | steps: Map.put(state.steps, {job_id, name}, step),
-        step_seqs: Map.put(state.step_seqs, job_id, seq),
+      | steps: if(exists?, do: state.steps, else: Map.put(state.steps, {job_id, name}, step)),
+        step_seqs: if(exists?, do: state.step_seqs, else: Map.put(state.step_seqs, job_id, seq)),
         jobs: Map.put(state.jobs, job_id, job)
     }
 
