@@ -10,6 +10,16 @@
   Validated by mutation: reverting either known production bug in the model
   (the budget crash window; the cancel-request clear) yields a TLC
   counterexample matching the real-world failure step for step.
+- **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
+  versioned protocol: tables, state machine, annotated SQL for every
+  operation, advisory-lock discipline, the two soak-learned race rules, and
+  a conformance path (the soak driver verifies any foreign worker SDK by
+  reading the database). Groundwork for Python/TypeScript SDKs as thin
+  contract implementations rather than rewrites.
+- **`Capstan.Codec` — cross-language value envelope.** Step values and job
+  results now decode as Erlang term format (leading byte 131, written by
+  Elixir) *or* UTF-8 JSON (written by any other SDK); tested with
+  foreign-written JSON rows replaying through the engine.
 
 ### Fixed
 - **Budgets are now enforced before every step execution, not only after.**
@@ -27,17 +37,6 @@
   losing a user's cancellation if the worker died before honoring it. The
   flag now persists across all non-terminal transitions on both adapters;
   the wire contract states it normatively.
-
-- **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
-  versioned protocol: tables, state machine, annotated SQL for every
-  operation, advisory-lock discipline, the two soak-learned race rules, and
-  a conformance path (the soak driver verifies any foreign worker SDK by
-  reading the database). Groundwork for Python/TypeScript SDKs as thin
-  contract implementations rather than rewrites.
-- **`Capstan.Codec` — cross-language value envelope.** Step values and job
-  results now decode as Erlang term format (leading byte 131, written by
-  Elixir) *or* UTF-8 JSON (written by any other SDK); tested with
-  foreign-written JSON rows replaying through the engine.
 
 ## 1.0.0-rc.4 — 2026-07-20
 
