@@ -2,7 +2,7 @@ defmodule Capstan.MixProject do
   use Mix.Project
 
   @version "1.0.0-rc.4"
-  @source_url "https://github.com/bariserdem/capstan"
+  @source_url "https://github.com/b-erdem/capstan"
 
   def project do
     [

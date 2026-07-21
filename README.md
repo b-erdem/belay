@@ -2,7 +2,7 @@
 <p align="center">The durable job engine for the AI age — open, leaderless, Postgres-native.</p>
 
 <p align="center">
-  <a href="https://github.com/bariserdem/capstan/actions/workflows/ci.yml"><img src="https://github.com/bariserdem/capstan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/b-erdem/capstan/actions/workflows/ci.yml"><img src="https://github.com/b-erdem/capstan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://hex.pm/packages/capstan"><img src="https://img.shields.io/hexpm/v/capstan.svg" alt="Hex"></a>
   <a href="https://hexdocs.pm/capstan"><img src="https://img.shields.io/badge/hex-docs-8e64dd" alt="Docs"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
