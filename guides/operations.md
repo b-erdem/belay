@@ -51,7 +51,7 @@ Postgres 16, M1):
 | cross-process, polling only | 49.4ms | 179ms | 202ms | 349ms |
 | cross-process + `pg_notify` | 11.0ms | 12.8ms | 24.5ms | 371ms |
 
-Honest caveats, with receipts (digest in `docs/research/`): Postgres
+Honest caveats, with receipts: Postgres
 serializes NOTIFY-issuing commits on a global lock (the Recall.ai outage
 class; ~190k vs ~350k TPS with/without it in pgsql-hackers benchmarks —
 present through PG 18, and PG 19's fix covers only the listener-wake side).

@@ -1,8 +1,7 @@
 # Capstan v2 — Standalone Design
 
 *Rethought 2026-07-20 after the decision to drop the Oban substrate entirely.
-The v0 Oban-layer implementation is preserved at git tag `v0-oban-layer`; the
-market/pain research behind this design is in PLAN.md and docs/research/.*
+The v0 Oban-layer implementation is preserved at git tag `v0-oban-layer`.*
 
 ## 1. Why standalone (what the freedom actually buys)
 
