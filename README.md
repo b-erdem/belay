@@ -36,7 +36,7 @@ defmodule MyApp.ResearchAgent do
 
     # Human in the loop: durable wait, instant wake on signal.
     case Capstan.await(ctx, :approval, timeout: 86_400) do
-      %{"approved" => true} -> {:ok, summary}
+      %{"approved" => true} -> {:ok, %{summary: summary, checks: checks}}
       _ -> {:cancel, :rejected}
     end
   end
@@ -133,8 +133,9 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 | Encrypted inputs | AES-256-GCM at rest; plaintext only in the executing process |
 | Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — change queues and schedules with no deploy |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with exactly-once slots |
-| **Embedded dashboard** | zero dependencies, one child spec — everything in the screenshots above |
+| **Embedded dashboard** | zero dependencies, one child spec — everything in the GIFs above |
 | **MCP server** | `mix capstan.mcp` — AI assistants inspect and operate the queue, mutations behind a pluggable authorizer |
+| **Oban migration** | `mix capstan.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
 
 ## Measured, not claimed
 
@@ -148,12 +149,14 @@ Numbers from this repo's reproducible harnesses on a laptop (Postgres 16):
 | Endurance soak (7h) | 99,004 jobs · 4,978 `kill -9` · 13 DB restarts · **13/13 invariants** | `soak/run.sh` → reports in `soak/reports/` |
 | Model checking | **187,975,659 distinct states, zero violations** (TLC, complete to depth 49) | `verify/spec/` |
 | Schedule exploration | READ COMMITTED wake race reproduced + fix proven across 400 schedules | `verify/wake_protocol/` |
-| Suites | 115 (memory) + 122 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
+| Suites | 115 (memory) + 125 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
 
-Four real bugs were found by these harnesses before any user could — two by
-chaos, one by adapter-equivalence property testing, two by extending the
-formal model — and each layer is validated by *rediscovery*: revert any fix
-in the model and TLC produces the production failure, step for step
+Six real bugs were found by these harnesses before any user could: two by
+the chaos soak (a READ COMMITTED wake race among them), one by the 7-hour
+endurance run (the budget crash window), one by adapter-equivalence
+property testing (lost cancel requests), and two by extending the formal
+model (retry semantics). The model is validated by *rediscovery*: revert
+any fix in it and TLC reproduces the production failure, step for step
 ([CHANGELOG](CHANGELOG.md), [verify/](verify/README.md)). The race lessons
 are codified in the [wire contract](SCHEMA.md).
 
@@ -170,7 +173,7 @@ lease — renewed leases replace guessing.
 
 ```elixir
 # mix.exs
-{:capstan, "~> 1.0.0-rc"}
+{:capstan, "~> 1.0.0-rc.4"}
 
 # once, at deploy time
 Capstan.Storage.Postgres.migrate!(db_url)
@@ -199,6 +202,22 @@ assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
 Capstan.Clock.Sim.advance(clock, 3_600)   # backoff, cron, rate windows, leases…
 ```
 
+## Coming from Oban?
+
+Workers port mechanically (`perform/1` → `run/1`), the plugins you delete
+are engine config (Pruner → `retention:`, Lifeline → renewed leases, Cron
+→ `crons:`), and pending jobs move in one command:
+
+```bash
+mix capstan.migrate_oban --url postgres://.../my_app            # dry-run report
+mix capstan.migrate_oban --url postgres://.../my_app --execute
+```
+
+The [migration guide](guides/migrating-from-oban.md) has the full porting
+map, the uniqueness translation, and the archive pattern for historical
+rows — with field notes from a real port that went 222/222 on the first
+run.
+
 ## Polyglot by construction
 
 The Postgres schema **is** the protocol — specified in [SCHEMA.md](SCHEMA.md)
@@ -215,6 +234,7 @@ by the same soak harness, sharing one database with Elixir workers.
 [Operations](guides/operations.md) ·
 [Testing](guides/testing.md) ·
 [Honest comparison](guides/comparison.md) ·
+[Formal verification](verify/README.md) ·
 [Architecture](DESIGN.md) ·
 [Wire contract](SCHEMA.md)
 
