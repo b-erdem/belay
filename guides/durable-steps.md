@@ -59,10 +59,12 @@ Capstan.insert(MyApp.Capstan,
   MyApp.ResearchAgent.new(%{"topic" => topic}, budget: [usd: 5.00, tokens: 500_000]))
 ```
 
-After every step's cost is recorded, the engine compares accumulated spend to
-the budget and fails the job with `:budget_exceeded` the moment either cap is
-crossed. The failed job keeps its journal — you can inspect exactly which
-steps spent what with `Capstan.steps/2`.
+The engine checks accumulated spend against the budget both *before* running
+each step body (against durable spend, so not even a crash mid-failure can
+buy an extra step on retry) and *after* recording its cost, failing the job
+with `:budget_exceeded` the moment either cap is crossed. The failed job
+keeps its journal — you can inspect exactly which steps spent what with
+`Capstan.steps/2`.
 
 ## The journal is a debugging asset
 

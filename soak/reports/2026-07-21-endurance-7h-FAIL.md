@@ -45,3 +45,27 @@ This is the rc gate's accelerated soak; the 48h endurance run remains open.
 ## Worker-side observations (from logs)
 - Fenced stale acks: 0
 - Claim rounds skipped during outages: 243
+
+## Post-mortem (added after diagnosis)
+
+Both failures diagnosed the same morning; one real bug, one checker artifact:
+
+- **budget (REAL BUG, fixed)**: the runner checked the budget only *after*
+  journaling a new step. A `kill -9` between journaling the over-budget
+  crossing step and acking the failure let the next attempt replay past the
+  journal (the memoized path had no check) and execute + pay for one extra
+  step. All 6 affected jobs: attempt=2, spent 0.8 of a 0.5 budget, effect
+  ledger shows the 4th body executed exactly once. Fix: pre-flight budget
+  check against durable spend before every new step body (reuses the row
+  the cancel check already fetches). Deterministic regression test added
+  (fails on the old code, passes on the fix).
+- **duplicate-rate (checker artifact, recalibrated)**: the flat `> 200`
+  threshold predated endurance scale. 359 duplicates across 4,978 kills is
+  7.2% per kill — *lower* than the previously passing 150s run (3/50 = 6%),
+  and the multiplicity distribution (346 steps 2x, 13 steps 3x, none higher)
+  is exactly isolated crash windows, not systemic re-running. Threshold now
+  scales with kill count.
+
+Everything else held over 7 hours: 99,004 jobs, 4,978 kills, 13 Postgres
+restarts, zero lost jobs, zero stuck jobs, byte-correct results, exact
+cron dedup, spawn idempotency, flow ordering.

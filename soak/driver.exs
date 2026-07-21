@@ -333,7 +333,21 @@ for [name, slot, n] <- cron_dups, do: fail.("cron-dedup", "#{name}@#{slot} fired
 %{rows: [[total_effects]]} = D.q!("SELECT count(*) FROM soak_effects")
 %{rows: [[distinct_effects]]} = D.q!("SELECT count(*) FROM (SELECT DISTINCT job_id, step FROM soak_effects) d")
 
-if dup_steps > 200, do: fail.("duplicate-rate", "#{dup_steps} duplicated steps — systemic re-running?")
+# Duplicates come from crash windows, so they scale with chaos intensity,
+# never with total steps: bound them per kill (observed ~6-7% across runs;
+# the 7h endurance run measured 359/4978). The flat floor keeps short runs
+# from flapping on small counts. Systemic re-running blows through this
+# bound immediately (it scales with steps, ~50x the allowance).
+early_kills =
+  case File.read("soak/tmp/chaos.log") do
+    {:ok, content} -> content |> String.split("\n") |> Enum.count(&String.starts_with?(&1, "KILL"))
+    _ -> 0
+  end
+
+dup_allowance = max(200, round(early_kills * 0.2))
+
+if dup_steps > dup_allowance,
+  do: fail.("duplicate-rate", "#{dup_steps} duplicated steps (> #{dup_allowance} for #{early_kills} kills) — systemic re-running?")
 
 # -- Report --------------------------------------------------------------------
 

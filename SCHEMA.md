@@ -247,7 +247,11 @@ delivery still find them.
 
 ### 8.2 Steps
 Read `SELECT value WHERE job_id=$1 AND name=$2`; hit ⇒ decode envelope and
-skip execution. Miss ⇒ run the function, then
+skip execution. Miss ⇒ the SDK MUST first re-read the job row and fail with
+`budget_exceeded` if durable `spent_*` already exceeds a budget column —
+without this pre-flight check, a crash between journaling the over-budget
+step and acking the failure lets the next attempt replay past the journal
+and execute one more paid step. Then run the function, then
 `INSERT (job_id, seq=(SELECT COALESCE(MAX(seq),0)+1 …), name, value, costs,
 $now) ON CONFLICT (job_id, name) DO NOTHING`, then
 `UPDATE capstan_jobs SET spent_usd_micros = spent_usd_micros + $u,

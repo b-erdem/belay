@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Fixed
+- **Budgets are now enforced before every step execution, not only after.**
+  The 7-hour endurance soak (99,004 jobs, 4,978 worker kills, 13 Postgres
+  restarts) caught 6 jobs paying for one step past their budget: the check
+  ran only after journaling a *new* step, so a crash between journaling the
+  over-budget step and acking the failure let the next attempt replay past
+  the journal and execute one more paid step. The runner now pre-flights
+  the budget against durable spend before running any step body (no extra
+  queries — it reuses the row the cancel check already fetches). A
+  deterministic regression test pins the crash window.
 - **Cancel requests now survive crashes and retries.** The adapter-
   equivalence property test (below) caught the Postgres ack path clearing
   `cancel_requested` on reclaim/retry while Memory preserved it — silently

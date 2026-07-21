@@ -179,7 +179,13 @@ defmodule Capstan.Runner do
         throw({:capstan_replay, {:missing_step, name}})
 
       :none ->
-        check_cancel!(config, job)
+        fresh = check_cancel!(config, job)
+
+        # Pre-flight, against the durable spend: a crash between journaling
+        # the over-budget step and acking the failure must not let the next
+        # attempt replay past the journal and pay for one more step. (Found
+        # by the 7h endurance soak: 6 of 1750 budget jobs ran a 4th step.)
+        check_budget!(job, fresh)
 
         result = fun.()
         bin = Capstan.Codec.encode(result)
@@ -386,6 +392,10 @@ defmodule Capstan.Runner do
   @doc false
   def decrypt_for_replay(config, job), do: maybe_decrypt(config, job)
 
+  # Returns the freshly-read job row so callers can check durable spend
+  # without a second query. Falls back to the claim-time row if the read
+  # fails — its spend is stale-low, which is the safe direction (the
+  # post-write check still catches the crossing step).
   defp check_cancel!(config, job) do
     {storage, ref} = config.storage_ref
 
@@ -393,8 +403,11 @@ defmodule Capstan.Runner do
       {:ok, %Job{cancel_requested: true}} ->
         throw({:capstan_control, {:cancelled, :cancel_requested}})
 
+      {:ok, %Job{} = fresh} ->
+        fresh
+
       _ ->
-        :ok
+        job
     end
   end
 
