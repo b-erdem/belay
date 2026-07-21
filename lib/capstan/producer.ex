@@ -3,10 +3,26 @@ defmodule Capstan.Producer do
 
   # One per queue per node: claims jobs up to local demand on a jittered poll,
   # on pokes (local inserts/releases + cluster broadcasts), and on completions.
+  #
+  # Two adaptive behaviours, both node-local and leaderless:
+  #
+  #   * Chunk gathering — jobs whose worker declares `chunk:` are buffered
+  #     per worker until `size` is reached or `gather_ms` elapses, then run
+  #     as ONE `run_chunk/1` invocation. Buffered jobs are already claimed
+  #     and leased, so a crash mid-gather reclaims them like any crash; the
+  #     gather window is clamped to half the lease TTL so a healthy buffer
+  #     can never outlive its lease.
+  #
+  #   * Adaptive concurrency — `limit: [min: a, max: b]` scales this node's
+  #     limit up while claim rounds come back full and decays it when the
+  #     queue idles, mirroring the burst-poll cadence. `global_limit`, rate
+  #     limits, and partition fairness still bound the fleet exactly.
 
   use GenServer
 
-  alias Capstan.{Config, Runner}
+  require Logger
+
+  alias Capstan.{Config, Job, Runner}
 
   def start_link({config, queue, spec}) do
     GenServer.start_link(__MODULE__, {config, to_string(queue), spec},
@@ -27,11 +43,17 @@ defmodule Capstan.Producer do
       config: config,
       queue: queue,
       spec: spec,
+      # ref => slot count (1 per plain job, chunk length per chunk task).
       running: %{},
+      # kind => %{jobs: [...], opts: %{size, gather_ms}, timer: ref | nil}
+      buffer: %{},
       paused: false,
       # Adaptive cadence: busy_poll while work is flowing, decaying to
       # poll_interval when idle — burst latency without idle DB load.
-      interval: config.busy_poll
+      interval: config.busy_poll,
+      # Adaptive concurrency: nil for static limits, else scales between
+      # limit_min and local_limit (the max).
+      cur_limit: spec.limit_min || spec.local_limit
     }
 
     {:ok, schedule_poll(state), {:continue, :claim}}
@@ -67,12 +89,18 @@ defmodule Capstan.Producer do
     {:noreply, claim(%{state | running: Map.delete(state.running, ref)})}
   end
 
+  # Gather deadline for a chunked worker: dispatch whatever is buffered.
+  # Fires even while paused — buffered jobs hold live leases and must run.
+  def handle_info({:flush_chunk, kind}, state) do
+    {:noreply, flush_buffer(state, kind)}
+  end
+
   defp claim(%{paused: true} = state), do: state
 
   # A storage failure (database restart, network blip) skips this round and
   # logs — the next poll retries. Claiming must never crash-loop the producer.
   defp claim(%{config: config, spec: spec} = state) do
-    demand = spec.local_limit - map_size(state.running)
+    demand = state.cur_limit - slots_used(state)
 
     if demand <= 0 do
       state
@@ -82,32 +110,140 @@ defmodule Capstan.Producer do
       {:ok, jobs} =
         storage.claim(ref, spec, demand, config.node_id, config.lease_ttl, Config.now(config))
 
-      running =
-        Enum.reduce(jobs, state.running, fn job, acc ->
-          task =
-            Task.Supervisor.async_nolink(Capstan.task_sup(config.name), Runner, :execute, [
-              config,
-              job
-            ])
+      {chunked, plain} = Enum.split_with(jobs, &chunk_opts(&1))
 
-          Map.put(acc, task.ref, job.id)
-        end)
+      state = Enum.reduce(plain, state, &start_plain(&2, &1))
+      state = Enum.reduce(Enum.group_by(chunked, & &1.kind), state, &buffer_chunk(&2, &1))
 
-      adapt(%{state | running: running}, length(jobs))
+      adapt(state, length(jobs), demand)
     end
   rescue
     error ->
-      require Logger
-
       Logger.warning(
         "[capstan] queue #{state.queue} claim skipped (storage unavailable?): " <>
           Exception.message(error)
       )
 
-      adapt(state, 0)
+      adapt(state, 0, 0)
   end
 
-  defp adapt(%{config: config} = state, claimed) do
+  defp start_plain(state, job) do
+    task =
+      Task.Supervisor.async_nolink(Capstan.task_sup(state.config.name), Runner, :execute, [
+        state.config,
+        job
+      ])
+
+    %{state | running: Map.put(state.running, task.ref, 1)}
+  end
+
+  # -- Chunk gathering ----------------------------------------------------------
+
+  defp buffer_chunk(state, {kind, jobs}) do
+    opts = chunk_opts(hd(jobs))
+
+    entry =
+      state.buffer
+      |> Map.get(kind, %{jobs: [], opts: opts, timer: nil})
+      |> Map.update!(:jobs, &(&1 ++ jobs))
+
+    state = put_in(state.buffer[kind], entry)
+    state = dispatch_full_chunks(state, kind)
+
+    case state.buffer[kind] do
+      nil ->
+        state
+
+      %{jobs: []} ->
+        state
+
+      %{opts: %{gather_ms: 0}} ->
+        # No gathering: run each claim round's remainder as its own chunk.
+        flush_buffer(state, kind)
+
+      %{timer: nil} = entry ->
+        # Clamped so a healthy buffer can never outlive its claim lease.
+        gather = min(entry.opts.gather_ms, div(state.config.lease_ttl, 2))
+        timer = Process.send_after(self(), {:flush_chunk, kind}, gather)
+
+        put_in(state.buffer[kind].timer, timer)
+
+      _ ->
+        state
+    end
+  end
+
+  defp dispatch_full_chunks(state, kind) do
+    case state.buffer[kind] do
+      %{jobs: jobs, opts: %{size: size}} = entry when length(jobs) >= size ->
+        {chunk, rest} = Enum.split(jobs, size)
+
+        state
+        |> start_chunk(chunk)
+        |> put_in([:buffer, kind], %{entry | jobs: rest})
+        |> dispatch_full_chunks(kind)
+
+      _ ->
+        state
+    end
+  end
+
+  defp flush_buffer(state, kind) do
+    case state.buffer[kind] do
+      nil ->
+        state
+
+      %{jobs: [], timer: timer} ->
+        cancel_timer(timer)
+
+        %{state | buffer: Map.delete(state.buffer, kind)}
+
+      %{jobs: jobs, timer: timer} ->
+        cancel_timer(timer)
+
+        state
+        |> start_chunk(jobs)
+        |> Map.update!(:buffer, &Map.delete(&1, kind))
+    end
+  end
+
+  defp start_chunk(state, jobs) do
+    task =
+      Task.Supervisor.async_nolink(Capstan.task_sup(state.config.name), Runner, :execute_chunk, [
+        state.config,
+        jobs
+      ])
+
+    %{state | running: Map.put(state.running, task.ref, length(jobs))}
+  end
+
+  defp cancel_timer(nil), do: :ok
+  defp cancel_timer(ref), do: Process.cancel_timer(ref)
+
+  defp slots_used(state) do
+    running = state.running |> Map.values() |> Enum.sum()
+    buffered = state.buffer |> Map.values() |> Enum.map(&length(&1.jobs)) |> Enum.sum()
+
+    running + buffered
+  end
+
+  defp chunk_opts(%Job{} = job) do
+    case Job.worker_module!(job).__capstan_defaults__()[:chunk] do
+      nil ->
+        nil
+
+      opts ->
+        %{size: Keyword.get(opts, :size, 10), gather_ms: Keyword.get(opts, :gather_ms, 0)}
+    end
+  rescue
+    # Unknown/invalid worker modules take the plain path, where the runner
+    # produces the proper per-job failure.
+    _ -> nil
+  end
+
+  # -- Adaptive cadence and concurrency -----------------------------------------
+
+  defp adapt(%{config: config, spec: spec} = state, claimed, demand) do
     interval =
       if claimed > 0 do
         config.busy_poll
@@ -115,7 +251,34 @@ defmodule Capstan.Producer do
         min(state.interval * 2, config.poll_interval)
       end
 
-    %{state | interval: interval}
+    cur =
+      cond do
+        spec.limit_min == nil ->
+          state.cur_limit
+
+        # Saturated round: everything we asked for was there. Scale up.
+        claimed > 0 and claimed >= demand and state.cur_limit < spec.local_limit ->
+          scale(state, min(spec.local_limit, state.cur_limit * 2))
+
+        # Fully idle: decay toward the floor.
+        claimed == 0 and slots_used(state) == 0 and state.cur_limit > spec.limit_min ->
+          scale(state, max(spec.limit_min, div(state.cur_limit, 2)))
+
+        true ->
+          state.cur_limit
+      end
+
+    %{state | interval: interval, cur_limit: cur}
+  end
+
+  defp scale(state, new_limit) do
+    :telemetry.execute([:capstan, :queue, :scale], %{limit: new_limit}, %{
+      name: state.config.name,
+      queue: state.queue,
+      from: state.cur_limit
+    })
+
+    new_limit
   end
 
   defp flush_pokes do

@@ -61,18 +61,130 @@ defmodule Capstan.Runner do
     end
   end
 
+  @doc false
+  # Chunk execution: one worker invocation over N gathered jobs, then one
+  # fenced ack per job with its own outcome. Runs from the producer (gathered
+  # dispatch) and from Testing.drain (per claim round, ungathered).
+  def execute_chunk(%Config{} = config, [%Job{} | _] = jobs) do
+    Enum.each(jobs, &register_running(config, &1.id))
+
+    jobs = Enum.map(jobs, &maybe_decrypt(config, &1))
+    ctxs = Enum.map(jobs, &%Ctx{job: &1, capstan: config.name, config: config})
+    module = Job.worker_module!(hd(jobs))
+    started = System.monotonic_time()
+
+    for job <- jobs do
+      :telemetry.execute([:capstan, :job, :start], %{system_time: System.system_time()}, %{
+        job: job,
+        name: config.name
+      })
+    end
+
+    outcomes =
+      try do
+        cond do
+          not function_exported?(module, :run_chunk, 1) ->
+            # A config error, not a transient one: fail directly instead of
+            # burning every job's attempts on retries.
+            failure = %{"error" => "#{inspect(module)} declares chunk: but not run_chunk/1"}
+            Map.new(jobs, &{&1.id, {:failed, failure}})
+
+          true ->
+            with_timeout(module, fn -> module.run_chunk(ctxs) end)
+            |> normalize_chunk(jobs, config)
+        end
+      catch
+        # Control throws (budget kill, honored cancel) cannot be attributed
+        # to one job of the chunk — retry them all; per-job conditions
+        # re-assert themselves on the retried singles. Documented tradeoff.
+        :throw, {:capstan_control, control} ->
+          error = %{"error" => "chunk aborted by control: #{inspect(control)}"}
+          Map.new(jobs, fn job -> {job.id, map_return({:error, error}, config, job)} end)
+
+        kind, reason ->
+          Map.new(jobs, fn job ->
+            {job.id, error_outcome({kind, reason, __STACKTRACE__}, config, job)}
+          end)
+      end
+
+    {storage, ref} = config.storage_ref
+
+    {acked, released} =
+      Enum.reduce(jobs, {[], []}, fn job, {acked_acc, released_acc} ->
+        outcome = Map.fetch!(outcomes, job.id)
+
+        case storage.ack(ref, job, outcome, Config.now(config)) do
+          {:ok, %{job: acked, released: rel, cancelled: cancelled}} ->
+            :telemetry.execute(
+              [:capstan, :job, :stop],
+              %{duration: System.monotonic_time() - started},
+              %{job: acked, name: config.name, state: acked.state}
+            )
+
+            broadcast_terminal(config, [acked | cancelled])
+
+            {[acked | acked_acc], rel ++ released_acc}
+
+          {:error, :stale} ->
+            Logger.warning("[capstan] stale ack for job #{job.id} (attempt #{job.attempt})")
+
+            {acked_acc, released_acc}
+        end
+      end)
+
+    poke_released(config, released)
+
+    {:ok, Enum.reverse(acked)}
+  end
+
+  # Map a chunk return onto per-job outcomes.
+  defp normalize_chunk(:ok, jobs, _config), do: Map.new(jobs, &{&1.id, {:succeeded, nil}})
+
+  defp normalize_chunk({:error, reason}, jobs, config) do
+    Map.new(jobs, fn job -> {job.id, map_return({:error, reason}, config, job)} end)
+  end
+
+  defp normalize_chunk({:ok, %{} = results}, jobs, _config) do
+    Map.new(jobs, fn job ->
+      case Map.fetch(results, job.id) do
+        {:ok, value} -> {job.id, {:succeeded, :erlang.term_to_binary(value)}}
+        :error -> {job.id, {:succeeded, nil}}
+      end
+    end)
+  end
+
+  defp normalize_chunk(%{} = by_id, jobs, config) do
+    Map.new(jobs, fn job ->
+      case Map.fetch(by_id, job.id) do
+        {:ok, ret} ->
+          {job.id, map_return(ret, config, job)}
+
+        :error ->
+          {job.id, map_return({:error, %{"error" => "no chunk outcome for job"}}, config, job)}
+      end
+    end)
+  end
+
+  defp normalize_chunk(other, jobs, config) do
+    Map.new(jobs, fn job -> {job.id, map_return(other, config, job)} end)
+  end
+
   # Workers with a `timeout:` run in a linked inner task so a hung run can be
   # cut off; the timeout is handled like any other error (retry, then fail).
   defp run_worker(module, ctx) do
+    with_timeout(module, fn -> module.run(ctx) end)
+  end
+
+  defp with_timeout(module, fun) do
     case module.__capstan_defaults__()[:timeout] do
       nil ->
-        module.run(ctx)
+        fun.()
 
       timeout ->
         task =
           Task.async(fn ->
             try do
-              {:returned, module.run(ctx)}
+              {:returned, fun.()}
             catch
               :throw, {:capstan_control, control} -> {:control, control}
             end

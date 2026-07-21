@@ -81,6 +81,38 @@ and execution at all.
 | queue `rate` | — | sliding-window admission, optionally resource-scoped |
 | queue `partition` | — | per-key fairness (`{:input, "tenant_id"}`) |
 
+## Throughput levers: chunks and adaptive limits
+
+**Chunk workers** turn N claimed jobs into one worker invocation — one bulk
+INSERT, one batch-priced embeddings call:
+
+```elixir
+use Capstan.Worker, queue: :embeddings, chunk: [size: 100, gather_ms: 500]
+```
+
+The producer gathers claimed jobs per worker up to `size`, waiting at most
+`gather_ms` for stragglers (full chunks dispatch immediately). Gathered jobs
+are already leased, so a crash mid-gather reclaims them like any other
+crash; the gather window is clamped to half the lease TTL. See
+`Capstan.Worker` for the `run_chunk/1` contract including per-job partial
+failure.
+
+**Adaptive concurrency** scales a queue's per-node limit with load:
+
+```elixir
+queues: [ingest: [limit: [min: 2, max: 50]]]
+```
+
+Saturated claim rounds double the limit toward `max`; an idle queue decays
+back to `min`. Leaderless — each node adapts its own limit, and
+`global_limit`, rate limits, and partition fairness still bound the fleet
+exactly. Scale changes emit `[:capstan, :queue, :scale]`.
+
+For policy-driven scaling (queue depth thresholds, business hours, an
+operating agent watching costs), drive `Capstan.Queues.put/3` from your own
+logic — it's runtime CRUD, reconciled by every node, and it's exposed over
+MCP, so an agent can resize queues with the same tool call you would.
+
 ## Retention
 
 Terminal jobs are pruned with their steps and events by the sweeper:

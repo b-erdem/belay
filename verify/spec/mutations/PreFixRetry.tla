@@ -1,4 +1,4 @@
----------------------------- MODULE Spec ----------------------------
+---------------------------- MODULE PreFixRetry ----------------------------
 (*****************************************************************************)
 (* A TLA+ model of the Capstan job engine's DURABLE execution mechanics,    *)
 (* drawn from the reference storage implementation                          *)
@@ -43,10 +43,9 @@
 (*     5) preserving the crossing arithmetic.                               *)
 (*   * Signals, awaiting/paused states, dynamic children, rate limiting and  *)
 (*     encryption are out of scope for these four properties.               *)
-(*   * A specific 5-job fixture stands in for the trace workers: a budget   *)
-(*     job, an always-raising job, its held dependent, a 2-step job for     *)
-(*     happy/retry/cancel behaviours, and a second-level dependent so the   *)
-(*     operator Retry action is explored across a 2-deep chain.             *)
+(*   * A specific 4-job fixture stands in for the trace workers: a 5-step    *)
+(*     budget job, an always-raising job, its held dependent, and a 2-step   *)
+(*     job used for happy/retry/cancel behaviours.                          *)
 (*****************************************************************************)
 
 EXTENDS Integers, Sequences, FiniteSets
@@ -125,7 +124,7 @@ AllJournaled(j) == NextIdx(j) = 0
 
 \* [helper] workflow settlement predicates (storage.ex Logic.settle,
 \* doomed?/satisfied?).  Doomed jobs count as cancelled for dependents;
-\* multi-level chains settle through repeated Settle actions.
+\* here chains are one deep so a single pass suffices.
 Doomed(j) ==
   \E d \in Deps[j] :
      \/ (state[d] = "failed"    /\ "failed"    \notin WfIgnore[j])
@@ -283,16 +282,9 @@ Settle(j) ==
 Retry(j) ==
   /\ state[j] \in { "failed", "cancelled" }
   /\ retries[j] < 1
-  \* Global bound: at most two operator retries per behavior. Covers every
-  \* single-retry interaction plus the root-then-dependent recovery pair,
-  \* and keeps the canonical check tractable (~15 min, not hours). The
-  \* per-job bound alone admitted 100M+ distinct states with no new
-  \* interaction class beyond depth ~27.
-  /\ retries[1] + retries[2] + retries[3] + retries[4] + retries[5] < 2
   /\ retries'   = [retries EXCEPT ![j] = @ + 1]
-  /\ cancelReq' = [cancelReq EXCEPT ![j] = FALSE]
-  /\ state'     = [state EXCEPT ![j] = IF Deps[j] # {} THEN "held" ELSE "ready"]
-  /\ UNCHANGED << attempt, journaled, spent, live, execCount, clock >>
+  /\ state'     = [state EXCEPT ![j] = "ready"]
+  /\ UNCHANGED << attempt, journaled, spent, cancelReq, live, execCount, clock >>
 
 \* Self-loop at the fully-settled end state so a finished run is not a
 \* deadlock (all jobs terminal, nothing left to do).

@@ -147,9 +147,33 @@ defmodule Capstan.Config do
   end
 
   defp queue_defaults(queue, limit, opts) do
+    # `limit: n` is static; `limit: [min: a, max: b]` scales the producer's
+    # local concurrency between the bounds (leaderless — each node adapts its
+    # own limit; `global_limit` still caps the fleet).
+    {local_limit, limit_min} =
+      case limit do
+        n when is_integer(n) and n >= 1 ->
+          {n, nil}
+
+        bounds when is_list(bounds) ->
+          min = Keyword.fetch!(bounds, :min)
+          max = Keyword.fetch!(bounds, :max)
+
+          unless is_integer(min) and is_integer(max) and 1 <= min and min <= max do
+            raise ArgumentError,
+                  "queue #{queue}: limit bounds must satisfy 1 <= min <= max, got #{inspect(bounds)}"
+          end
+
+          {max, min}
+
+        other ->
+          raise ArgumentError, "queue #{queue}: invalid limit #{inspect(other)}"
+      end
+
     %{
       queue: queue,
-      local_limit: limit,
+      local_limit: local_limit,
+      limit_min: limit_min,
       global_limit: Keyword.get(opts, :global_limit),
       rate: normalize_rate(Keyword.get(opts, :rate)),
       partition: normalize_partition(Keyword.get(opts, :partition)),

@@ -343,6 +343,7 @@ defmodule Capstan.Dashboard do
   defp spec_view(spec) do
     %{
       "limit" => spec.local_limit,
+      "limit_min" => spec.limit_min,
       "global_limit" => spec.global_limit,
       "rate" => spec.rate && Map.new(spec.rate, fn {k, v} -> {to_string(k), v} end),
       "partition" => spec.partition && Tuple.to_list(spec.partition) |> Enum.map(&to_string/1),

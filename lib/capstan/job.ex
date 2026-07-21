@@ -226,19 +226,59 @@ defmodule Capstan.Worker do
   backoff) | `{:cancel, reason}` | `{:snooze, seconds}`. Raised exceptions
   retry. `Capstan.step/4`, `Capstan.await/3`, and `Capstan.sleep/3` manage
   control flow internally.
+
+  ## Chunk workers
+
+  Declare `chunk: [size: n, gather_ms: t]` and implement `c:run_chunk/1`
+  instead of `c:run/1` to process many jobs in one execution — one bulk
+  INSERT instead of hundreds, one batch-priced embeddings call instead of a
+  hundred singles:
+
+      defmodule MyApp.EmbedChunk do
+        use Capstan.Worker, queue: :embeddings, chunk: [size: 100, gather_ms: 500]
+
+        @impl Capstan.Worker
+        def run_chunk(ctxs) do
+          texts = Enum.map(ctxs, & &1.job.input["text"])
+
+          for {ctx, emb} <- Enum.zip(ctxs, MyApp.OpenAI.embed!(texts)),
+              into: %{},
+              do: {ctx.job.id, {:ok, emb}}
+        end
+      end
+
+  The producer gathers claimed jobs of the same worker up to `size`, waiting
+  at most `gather_ms` for stragglers (`gather_ms: 0` dispatches each claim
+  round as-is). Gathered jobs are already claimed and leased, so a crash
+  mid-gather is reclaimed like any other crash. Give chunk workers their own
+  queue — mixed queues chunk per worker, which fragments batches.
+
+  Return values: `:ok` (all succeed) | `{:ok, %{id => result}}` (per-job
+  results; missing ids succeed with `nil`) | `{:error, reason}` (every job
+  retries on its own backoff/max_attempts) | `%{id => outcome}` where each
+  outcome is any single-job return value — partial failure retries only the
+  failed jobs. Raises retry the whole chunk. Prefer per-job outcomes over
+  budgets/steps inside chunks: a control throw (budget kill, cancel honor)
+  cannot be attributed to one job and retries the entire chunk.
   """
 
-  @callback run(Capstan.Ctx.t()) ::
-              :ok
-              | {:ok, term()}
-              | {:error, term()}
-              | {:cancel, term()}
-              | {:snooze, non_neg_integer()}
+  @type result ::
+          :ok
+          | {:ok, term()}
+          | {:error, term()}
+          | {:cancel, term()}
+          | {:snooze, non_neg_integer()}
+
+  @callback run(Capstan.Ctx.t()) :: result()
+
+  @doc "Process a gathered chunk of jobs in one execution (chunk workers)."
+  @callback run_chunk([Capstan.Ctx.t()]) ::
+              :ok | {:ok, %{integer() => term()}} | {:error, term()} | %{integer() => result()}
 
   @doc "Per-attempt retry backoff in seconds. Overridable."
   @callback backoff(attempt :: pos_integer()) :: non_neg_integer()
 
-  @optional_callbacks backoff: 1
+  @optional_callbacks backoff: 1, run: 1, run_chunk: 1
 
   defmacro __using__(opts) do
     quote location: :keep do

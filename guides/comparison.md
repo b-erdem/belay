@@ -57,6 +57,13 @@ explicitly the next generation — if you're in Elixir and your workload looks
 like 2026 (agents, LLM calls, human gates, spend caps), that's the gap it
 fills.
 
+Chunked execution (Pro's chunk workers) and load-adaptive concurrency are
+covered natively: `chunk: [size: n, gather_ms: t]` with per-job partial
+failure, and `limit: [min: a, max: b]` per-node scaling that stays exactly
+bounded by the global/rate/partition limits. Capstan deliberately does NOT
+ship a central auto-scaler: runtime queue CRUD over MCP means scaling
+*policy* can live in your code — or your agent.
+
 ## When you should not use Capstan
 
 - You need SQLite/MySQL storage (SQLite is designed but post-1.0; the

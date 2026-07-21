@@ -28,3 +28,7 @@ capstan-*.tar
 doc/
 soak/tmp/
 capstan-*.tar
+verify/spec/**/states/
+verify/spec/states/
+verify/spec/*.log
+verify/spec/mutations/states/

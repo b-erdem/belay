@@ -382,3 +382,100 @@ defmodule Capstan.Test.Keys do
 
   def test_key, do: :binary.copy(<<7>>, 32)
 end
+
+defmodule Capstan.Test.ChunkEcho do
+  @moduledoc false
+
+  # Doubles each job's "n" in one run_chunk call; records observed chunk sizes.
+  use Capstan.Worker, queue: :default, chunk: [size: 3, gather_ms: 0]
+
+  alias Capstan.Test.Events
+
+  @impl Capstan.Worker
+  def run_chunk(ctxs) do
+    Events.record({:chunk, length(ctxs)})
+
+    {:ok, Map.new(ctxs, fn ctx -> {ctx.job.id, ctx.job.input["n"] * 2} end)}
+  end
+end
+
+defmodule Capstan.Test.ChunkFlaky do
+  @moduledoc false
+
+  # Per-job outcomes: inputs with "fail" fail on their first attempt only.
+  use Capstan.Worker, queue: :default, max_attempts: 3, chunk: [size: 10, gather_ms: 0]
+
+  alias Capstan.Test.Events
+
+  @impl Capstan.Worker
+  def run_chunk(ctxs) do
+    Events.record({:chunk, length(ctxs)})
+
+    Map.new(ctxs, fn ctx ->
+      if ctx.job.input["fail"] && ctx.job.attempt == 1 do
+        {ctx.job.id, {:error, "planned chunk failure"}}
+      else
+        {ctx.job.id, {:ok, ctx.job.input["n"]}}
+      end
+    end)
+  end
+
+  @impl Capstan.Worker
+  def backoff(_attempt), do: 5
+end
+
+defmodule Capstan.Test.ChunkBoom do
+  @moduledoc false
+
+  # Whole-chunk error on first attempts, success after.
+  use Capstan.Worker, queue: :default, max_attempts: 3, chunk: [size: 5, gather_ms: 0]
+
+  @impl Capstan.Worker
+  def run_chunk(ctxs) do
+    if hd(ctxs).job.attempt == 1, do: {:error, "chunk boom"}, else: :ok
+  end
+
+  @impl Capstan.Worker
+  def backoff(_attempt), do: 5
+end
+
+defmodule Capstan.Test.ChunkGather do
+  @moduledoc false
+
+  # Live-gathering worker: short window so tests can observe the deadline.
+  use Capstan.Worker, queue: :default, chunk: [size: 3, gather_ms: 120]
+
+  alias Capstan.Test.Events
+
+  @impl Capstan.Worker
+  def run_chunk(ctxs) do
+    Events.record({:gathered, length(ctxs)})
+
+    :ok
+  end
+end
+
+defmodule Capstan.Test.ChunkNoImpl do
+  @moduledoc false
+
+  # Declares chunk: but only implements run/1 — a config error the runner
+  # must fail loudly instead of retrying into.
+  use Capstan.Worker, queue: :default, chunk: [size: 2]
+
+  @impl Capstan.Worker
+  def run(_ctx), do: :ok
+end
+
+defmodule Capstan.Test.Sleeper do
+  @moduledoc false
+
+  # Real wall-clock nap for live adaptive-concurrency tests.
+  use Capstan.Worker, queue: :default
+
+  @impl Capstan.Worker
+  def run(ctx) do
+    Process.sleep(ctx.job.input["ms"] || 30)
+
+    :ok
+  end
+end

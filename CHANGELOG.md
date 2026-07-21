@@ -27,6 +27,20 @@
   Elixir) *or* UTF-8 JSON (written by any other SDK); tested with
   foreign-written JSON rows replaying through the engine.
 
+- **Chunk workers.** `chunk: [size: n, gather_ms: t]` +
+  `run_chunk/1`: the producer gathers claimed jobs per worker and runs them
+  as one invocation — one bulk INSERT instead of hundreds, one batch-priced
+  embeddings call instead of a hundred singles. Per-job outcome maps retry
+  only the failed jobs; gathered jobs are already leased, so crashes
+  mid-gather reclaim cleanly. Full chunks dispatch without waiting for the
+  gather window.
+- **Adaptive per-queue concurrency.** `limit: [min: a, max: b]` scales each
+  node's limit up while claim rounds come back saturated and decays it when
+  the queue idles — leaderless, like the burst-poll cadence it mirrors, and
+  exactly bounded by `global_limit`/rate/partition limits. Policy-driven
+  scaling stays a recipe: drive runtime `Queues.put/3` (also over MCP, so an
+  agent can do it).
+
 ### Fixed
 - **Operator retry now clears a pending cancel and respects workflow
   dependencies.** Found by extending the TLA+ model with a `Retry` action:

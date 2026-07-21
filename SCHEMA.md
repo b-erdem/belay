@@ -195,6 +195,11 @@ select `running AND lease_until <= $now FOR UPDATE SKIP LOCKED`, then per
 row apply outcome `retry` (attempt < max) or `failed` with error
 `{"error":"lease_expired"}` — including full §7 settlement.
 
+**Chunked execution** is SDK-side composition, not schema: claim up to
+`size` rows, run them in one invocation, ack each row individually (fenced,
+§7). No contract changes; foreign SDKs implement it with the same claim/ack
+SQL.
+
 ## 7. Acking
 
 One transaction per ack. The terminal/park UPDATE is **fenced**:

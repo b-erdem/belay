@@ -34,8 +34,10 @@ defmodule Capstan.Testing do
         acc
 
       jobs ->
+        {chunked, plain} = Enum.split_with(jobs, &chunked?/1)
+
         acc =
-          Enum.reduce(jobs, acc, fn job, acc ->
+          Enum.reduce(plain, acc, fn job, acc ->
             case Runner.execute(config, job) do
               {:ok, acked, _released} ->
                 Map.update(acc, String.to_atom(acked.state), 1, &(&1 + 1))
@@ -45,7 +47,37 @@ defmodule Capstan.Testing do
             end
           end)
 
+        # Chunk workers run size-bounded chunks per claim round per kind —
+        # drain is synchronous, so there is no gather window to wait out.
+        acc =
+          chunked
+          |> Enum.group_by(& &1.kind)
+          |> Enum.reduce(acc, fn {_kind, group}, acc ->
+            size = chunk_size(hd(group))
+
+            group
+            |> Enum.chunk_every(size)
+            |> Enum.reduce(acc, fn chunk, acc ->
+              {:ok, acked} = Runner.execute_chunk(config, chunk)
+
+              Enum.reduce(acked, acc, fn job, acc ->
+                Map.update(acc, String.to_atom(job.state), 1, &(&1 + 1))
+              end)
+            end)
+          end)
+
         do_drain(config, spec, acc, iterations - 1)
     end
+  end
+
+  defp chunked?(job) do
+    Capstan.Job.worker_module!(job).__capstan_defaults__()[:chunk] != nil
+  rescue
+    _ -> false
+  end
+
+  defp chunk_size(job) do
+    Capstan.Job.worker_module!(job).__capstan_defaults__()[:chunk]
+    |> Keyword.get(:size, 10)
   end
 end

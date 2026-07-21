@@ -90,6 +90,8 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 | Cluster limits | `global_limit`, sliding-window `rate` (request- or **token**-based with true-up), per-tenant `partition` fairness (exact, skew-proof) |
 | Transactional enqueue | `Capstan.Txn.insert/3` in your Postgrex/Ecto transaction; wake-ups deliver exactly on commit |
 | Unique jobs | constraint-backed: while-incomplete, windowed, or forever |
+| Chunk workers | `chunk: [size:, gather_ms:]` — N jobs, one invocation (batch-priced APIs, bulk INSERTs), per-job partial failure |
+| Adaptive concurrency | `limit: [min:, max:]` — per-node scaling under load, exactly bounded by cluster limits |
 | Encrypted inputs | AES-256-GCM at rest; plaintext only in the executing process |
 | Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — change queues and schedules with no deploy |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with exactly-once slots |

@@ -19,6 +19,7 @@ defmodule Capstan.Storage do
   @type queue_spec :: %{
           queue: String.t(),
           local_limit: pos_integer(),
+          limit_min: pos_integer() | nil,
           global_limit: pos_integer() | nil,
           rate: %{allowed: pos_integer(), period: pos_integer()} | nil,
           partition: {:input | :meta, String.t()} | nil
