@@ -1,0 +1,3 @@
+%{
+  "lockstep": {:hex, :lockstep, "0.1.0", "4bb64d5494ba85057645a074c53024943667064fde79f007c8c7fb11006416f4", [:mix], [{:jason, "~> 1.4", [hex: :jason, repo: "hexpm", optional: true]}], "hexpm", "75c8bb9063800e13d474cb2599b57327d499b41b4d23ed0408aee7a8252194e0"},
+}

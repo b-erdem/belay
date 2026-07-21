@@ -64,6 +64,10 @@ also out of scope for these properties.
   green).
 - `spec/FINDING.md` — attest's structured report.
 - `spec/mutations/` — the two pre-fix mutants (must fail TLC).
+- `wake_protocol/` — a Lockstep controlled-concurrency model of the
+  parent-wake protocol (race R1): the rc.1 count-gated variant loses the
+  wake on a found, saved, replayable schedule; the shipped unconditional
+  variant survives every explored interleaving. See its README.
 
 ## Re-running
 
