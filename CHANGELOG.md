@@ -28,7 +28,6 @@
   flag now persists across all non-terminal transitions on both adapters;
   the wire contract states it normatively.
 
-### Added
 - **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
   versioned protocol: tables, state machine, annotated SQL for every
   operation, advisory-lock discipline, the two soak-learned race rules, and
