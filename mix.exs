@@ -14,9 +14,9 @@ defmodule Capstan.MixProject do
       deps: deps(),
       name: "Capstan",
       description:
-        "An agent-native durable job engine for Elixir on Postgres: memoized steps " <>
-          "with cost budgets, signals, dynamic child jobs, event streams, replay " <>
-          "debugging, token-aware rate limits, and an MCP server — leaderless, no Ecto.",
+        "A durable job engine for Elixir on Postgres: jobs built from memoized " <>
+          "steps with cost budgets, signals, workflows, event streams, replay " <>
+          "debugging, and token-aware rate limits — leaderless, no Ecto required.",
       package: package(),
       docs: docs()
     ]

@@ -179,8 +179,7 @@ lives in `soak/REPORT.md`.
 
 ## 1.0.0-rc.1 — 2026-07-20
 
-First release candidate. Everything below ships open, Apache-2.0, with no
-paid tier.
+First release candidate. Everything below ships open, Apache-2.0.
 
 ### Engine
 - Claim/lease/ack execution with attempt fencing; expired leases reclaimed

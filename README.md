@@ -1,5 +1,5 @@
 <p align="center"><strong>⚓ Capstan</strong></p>
-<p align="center">The durable job engine for the AI age — open, leaderless, Postgres-native.</p>
+<p align="center">A durable job engine for Elixir, on Postgres. Jobs are built from memoized steps — retries resume work instead of redoing it.</p>
 
 <p align="center">
   <a href="https://github.com/b-erdem/capstan/actions/workflows/ci.yml"><img src="https://github.com/b-erdem/capstan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -10,19 +10,65 @@
 
 ![The embedded dashboard, live](assets/dashboard-live.gif)
 
-Classic job queues retry *whole jobs*. That was fine when jobs sent emails —
-it's ruinous when attempt one spent ninety seconds and $0.40 of tokens
-before a network blip. Capstan changes the unit of retry: jobs are made of
-**memoized steps with cost accounting**, so a retry replays finished work in
-microseconds, a **budget cap kills a runaway agent** mid-flight, and the
-journal left behind is a debugging asset you can literally re-execute.
+Classic job queues retry *whole jobs*. Capstan's unit of durability is the
+**step**: each step's result is journaled the moment it completes, so a
+retried job replays finished steps from the journal in microseconds and
+continues from the first unfinished one. The same journal carries cost
+accounting, an event stream, and a record you can re-execute to debug.
 
-Everything here is open, Apache-2.0. **There is no paid tier — the base
-thing is the best version.**
+Dependencies: Postgrex, Jason, telemetry — no Ecto requirement, no Redis,
+no separate service. Apache-2.0.
+
+## Quick start
 
 ```elixir
-defmodule MyApp.ResearchAgent do
-  use Capstan.Worker, queue: :ai, max_attempts: 10
+# mix.exs
+{:capstan, "~> 1.0.0-rc.4"}
+
+# once, at deploy time (idempotent)
+Capstan.Storage.Postgres.migrate!(db_url)
+
+# application.ex
+children = [
+  {Capstan,
+   name: MyApp.Capstan,
+   storage: [adapter: :postgres, url: db_url],
+   queues: [default: 10, mailers: [limit: 20]],
+   crons: [[name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]]},
+  {Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}
+]
+```
+
+```elixir
+defmodule MyApp.WelcomeEmail do
+  use Capstan.Worker, queue: :mailers, max_attempts: 5
+
+  @impl Capstan.Worker
+  def run(ctx) do
+    MyApp.Mailer.deliver_welcome(ctx.job.input["user_id"])
+  end
+end
+
+Capstan.insert(MyApp.Capstan, MyApp.WelcomeEmail.new(%{"user_id" => 42}))
+```
+
+Testing is deterministic — drain synchronously, travel through time:
+
+```elixir
+{:ok, job} = Capstan.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
+assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
+
+Capstan.Clock.Sim.advance(clock, 3_600)   # backoff, cron, rate windows, leases…
+```
+
+## Steps, waits, fan-out — one worker
+
+Where Capstan pulls ahead of a classic queue is jobs with expensive parts,
+long waits, and moving pieces:
+
+```elixir
+defmodule MyApp.ResearchPipeline do
+  use Capstan.Worker, queue: :pipelines, max_attempts: 10
 
   @impl Capstan.Worker
   def run(ctx) do
@@ -42,22 +88,29 @@ defmodule MyApp.ResearchAgent do
   end
 end
 
-# A hard spend cap, enforced by the engine at step boundaries:
+# Enforced caps and dedup at insert:
 Capstan.insert(MyApp.Capstan,
-  MyApp.ResearchAgent.new(%{"url" => url}, budget: [usd: 1.00], unique: "research:#{url}"))
+  MyApp.ResearchPipeline.new(%{"url" => url}, budget: [usd: 1.00], unique: "research:#{url}"))
 ```
 
-## No surprise bills
+The same engine runs the unglamorous fleet — emails, webhooks, image
+processing, nightly crons — and the newer shapes those queues were never
+built for: declared workflow DAGs, month-long approval flows parked at zero
+cost, and LLM/agent pipelines where each API call is a journaled step with
+a price on it.
 
-Every AI app that ships a free tier meets the same monster: usage spikes,
-retries multiply LLM calls, and the provider invoice arrives before the
-dashboard does. Capstan enforces spend **in the engine**, in three layers:
+## Budgets and spend control
+
+LLM-heavy workloads add a failure mode classic queues don't model: cost.
+A retry that re-runs completed API calls buys them twice; a usage spike
+outruns any dashboard. Capstan enforces spend in the engine, in three
+layers:
 
 ```elixir
-# 1. Per-job hard cap — one runaway agent can never exceed its budget.
+# 1. Per-job hard cap — one runaway job can never exceed its budget.
 #    Enforced BEFORE each step against durable spend (model-checked across
 #    crash/retry windows — not even kill -9 mid-failure buys an extra step).
-MyApp.ResearchAgent.new(input, budget: [usd: 1.00])
+MyApp.ResearchPipeline.new(input, budget: [usd: 1.00])
 
 # 2. Fleet-wide caps per window — resource buckets span every queue that
 #    names them. Units are yours: tokens... or cents.
@@ -67,8 +120,8 @@ queues: [
   enrich: [limit: 10,
        rate: [resource: "spend_cents", allowed: 5_000, period: 86_400, estimate: 2]]
 ]
-# ^ that second line is a global kill-switch: at most $50/day, app-wide.
-#   When the window is spent, claims stop; work queues instead of billing.
+# ^ that second line caps the whole app at $50/day. When the window is
+#   spent, claims stop; work queues instead of billing.
 
 # 3. True-up — estimates are corrected by actuals, so windows converge on
 #    what the invoice will actually say:
@@ -80,17 +133,16 @@ Capstan.step(ctx, :summarize, fn ->
 end, cost: [usd: 0.02])
 ```
 
-Retries make this worse everywhere else — each attempt re-spends. Here they
-make it better: finished steps replay from the journal at zero cost, and
-the budget check reads *durable* spend, so an attempt can never "forget"
-what previous attempts already paid.
+Elsewhere, retries multiply spend — each attempt re-buys the work. Here
+they don't: finished steps replay from the journal at zero cost, and the
+budget check reads *durable* spend, so an attempt can never "forget" what
+previous attempts already paid.
 
-## Why Capstan
+## Why it's built this way
 
 - **The journal is the core.** Steps, costs, events, and results are
-  first-class columns — so budgets ("kill this agent at $5"), token-true-up
-  rate limits, streaming, and replay debugging fall out of the schema
-  instead of being bolted on.
+  first-class columns — so budgets, token-true-up rate limits, streaming,
+  and replay debugging fall out of the schema instead of being bolted on.
 - **Leaderless everything.** No peer election exists in the codebase: cron
   dedupes through a unique index, recovery is idempotent row-level work any
   node performs. The "leader stalled, nothing runs" failure class is
@@ -109,7 +161,7 @@ what previous attempts already paid.
 
 ## The workflow DAG view
 
-Workflows, fan-outs, and agent-spawned children render as a live graph —
+Workflows, fan-outs, and spawned children render as a live graph —
 deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 
 ![Workflow DAG completing](assets/workflow-dag.gif)
@@ -133,9 +185,9 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 | Encrypted inputs | AES-256-GCM at rest; plaintext only in the executing process |
 | Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — change queues and schedules with no deploy |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with exactly-once slots |
-| **Embedded dashboard** | zero dependencies, one child spec — everything in the GIFs above |
-| **MCP server** | `mix capstan.mcp` — AI assistants inspect and operate the queue, mutations behind a pluggable authorizer |
-| **Oban migration** | `mix capstan.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
+| Embedded dashboard | zero dependencies, one child spec — everything in the GIFs above |
+| MCP server | `mix capstan.mcp` — AI assistants inspect and operate the queue, mutations behind a pluggable authorizer |
+| Oban migration | `mix capstan.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
 
 ## Measured, not claimed
 
@@ -168,39 +220,6 @@ uniqueness everywhere): **222/222 tests green and a live-producer run on the
 first attempt, with zero engine changes required**. Dead-node recovery
 tightened from a conservative 45-minute rescue plugin to ~2× a 60-second
 lease — renewed leases replace guessing.
-
-## Quick start
-
-```elixir
-# mix.exs
-{:capstan, "~> 1.0.0-rc.4"}
-
-# once, at deploy time
-Capstan.Storage.Postgres.migrate!(db_url)
-
-# application.ex
-children = [
-  {Capstan,
-   name: MyApp.Capstan,
-   storage: [adapter: :postgres, url: db_url],
-   queues: [
-     default: 10,
-     ai: [limit: 5, global_limit: 2,
-          rate: [allowed: 100_000, period: 60, resource: "anthropic", estimate: 2_000]]
-   ],
-   crons: [[name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]]},
-  {Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}
-]
-```
-
-Testing is deterministic — drain synchronously, travel through time:
-
-```elixir
-{:ok, job} = Capstan.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
-assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
-
-Capstan.Clock.Sim.advance(clock, 3_600)   # backoff, cron, rate windows, leases…
-```
 
 ## Coming from Oban?
 

@@ -30,8 +30,8 @@ correct choice.
 Capstan exists for what that stack structurally doesn't sell: retries at
 step granularity (a retried Pro workflow re-runs whole jobs), enforceable
 spend budgets, post-hoc token accounting, durable event streams, journal
-replay debugging, dynamic child DAGs, and agent operability — open, with the
-base thing as the best version. Capstan also makes different architectural
+replay debugging, dynamic child DAGs, and agent operability — all of it
+open. Capstan also makes different architectural
 bets: no leader election anywhere, no LISTEN/NOTIFY dependency, leases
 instead of hour-scale rescue heuristics, and first-class columns instead of
 `meta` blobs.
