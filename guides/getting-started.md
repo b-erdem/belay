@@ -21,28 +21,47 @@ Capstan.Storage.Postgres.migrate!("postgres://user:pass@localhost/my_app")
 
 `migrate!/1` is idempotent and versioned — safe to run on every deploy.
 
-## Start an instance
+## Configure and start an instance
 
-Add Capstan to your supervision tree:
+Capstan reads its configuration from your application environment, keyed by
+the instance name — the same convention as `Ecto.Repo` and
+`Phoenix.Endpoint`:
+
+```elixir
+# config/config.exs
+config :my_app, MyApp.Capstan,
+  queues: [
+    default: 10,
+    mailers: [limit: 20],
+    ai: [limit: 5, global_limit: 2, rate: [allowed: 60, period: 60]]
+  ]
+
+# config/runtime.exs — values you only know at runtime
+config :my_app, MyApp.Capstan,
+  storage: [adapter: :postgres, url: System.fetch_env!("DATABASE_URL")]
+```
+
+Then `otp_app` pulls that config in the supervision tree:
 
 ```elixir
 # application.ex
 children = [
   MyApp.Repo,
-  {Capstan,
-   name: MyApp.Capstan,
-   storage: [adapter: :postgres, url: "postgres://user:pass@localhost/my_app"],
-   queues: [
-     default: 10,
-     mailers: [limit: 20],
-     ai: [limit: 5, global_limit: 2, rate: [allowed: 60, period: 60]]
-   ]}
+  {Capstan, otp_app: :my_app, name: MyApp.Capstan}
 ]
 ```
 
-Every node running this tree becomes a worker node. There is no leader:
-scheduling, cron, and recovery are all any-node operations deduplicated by
-the database.
+Inline opts on the child spec override the application-env base, so a
+computed URL or a test override can be passed directly:
+
+```elixir
+{Capstan, otp_app: :my_app, name: MyApp.Capstan, storage: [adapter: :memory]}
+```
+
+Or skip `otp_app` entirely and pass everything inline — both forms accept
+the same keys. Every node running this tree becomes a worker node. There is
+no leader: scheduling, cron, and recovery are all any-node operations
+deduplicated by the database.
 
 ## Define work
 

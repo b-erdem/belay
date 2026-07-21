@@ -30,6 +30,7 @@ defmodule Capstan.Config do
   @type t :: %__MODULE__{}
 
   def new(opts) do
+    opts = merge_otp_app(opts)
     name = Keyword.get(opts, :name, Capstan)
 
     %__MODULE__{
@@ -51,6 +52,23 @@ defmodule Capstan.Config do
       encryption: normalize_encryption(Keyword.get(opts, :encryption)),
       dynamic_sync: Keyword.get(opts, :dynamic_sync, 5_000)
     }
+  end
+
+  # `otp_app:` reads `config :my_app, MyApp.Capstan, ...` from application
+  # env as the base (the Ecto/Phoenix convention, keyed by the instance
+  # `name`), with any inline child-spec opts merged on top — so environment
+  # config lives in config/*.exs while runtime values (a computed storage
+  # URL from runtime.exs, test overrides) can still be passed directly.
+  defp merge_otp_app(opts) do
+    case Keyword.pop(opts, :otp_app) do
+      {nil, opts} ->
+        opts
+
+      {app, opts} ->
+        name = Keyword.get(opts, :name, Capstan)
+        base = Application.get_env(app, name, [])
+        Keyword.merge(base, opts)
+    end
   end
 
   @doc "Resolve the configured 32-byte encryption key, or nil."

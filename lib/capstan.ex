@@ -5,18 +5,23 @@ defmodule Capstan do
 
   ## Start an instance
 
-      children = [
-        {Capstan,
-         name: MyCapstan,
-         storage: [adapter: :postgres, url: "postgres://localhost/my_app"],
-         queues: [
-           default: 10,
-           ai: [limit: 5, global_limit: 2, rate: [allowed: 60, period: 60]]
-         ],
-         crons: [
-           [name: "digest", expr: "0 8 * * *", worker: MyApp.Digest]
-         ]}
-      ]
+  Configure in application env (keyed by the instance name, like `Ecto.Repo`
+  / `Phoenix.Endpoint`) and pull it in with `otp_app`:
+
+      # config/config.exs
+      config :my_app, MyCapstan,
+        queues: [default: 10, ai: [limit: 5, global_limit: 2, rate: [allowed: 60, period: 60]]],
+        crons: [[name: "digest", expr: "0 8 * * *", worker: MyApp.Digest]]
+
+      # config/runtime.exs
+      config :my_app, MyCapstan,
+        storage: [adapter: :postgres, url: System.fetch_env!("DATABASE_URL")]
+
+      # application.ex — inline opts override the app-env base
+      children = [{Capstan, otp_app: :my_app, name: MyCapstan}]
+
+  Or pass every option inline on the child spec and skip `otp_app` — both
+  forms take the same keys.
 
   ## Define work
 
@@ -50,6 +55,7 @@ defmodule Capstan do
   | Option | Default | Purpose |
   |---|---|---|
   | `:name` | `Capstan` | instance name (atom); first argument to every API call |
+  | `:otp_app` | `nil` | read the options below from `config :otp_app, name, ...`; inline opts override |
   | `:storage` | required | `[adapter: :postgres, url: ...]` or `[adapter: :memory]` |
   | `:queues` | `[]` | `queue: limit` or `queue: [limit:, global_limit:, rate:, partition:, manual:]` |
   | `:crons` | `[]` | `[[name:, expr:, worker:, input:, opts:]]`; merged with `Capstan.Crons` rows |

@@ -24,20 +24,33 @@ no separate service. Apache-2.0.
 ```elixir
 # mix.exs
 {:capstan, "~> 1.0.0-rc.5"}
+```
+
+```elixir
+# config/config.exs — the Ecto/Phoenix convention, keyed by the instance name
+config :my_app, MyApp.Capstan,
+  queues: [default: 10, mailers: [limit: 20]],
+  crons: [[name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]]
+
+# config/runtime.exs — runtime values (the database URL)
+config :my_app, MyApp.Capstan,
+  storage: [adapter: :postgres, url: System.fetch_env!("DATABASE_URL")]
+```
+
+```elixir
+# application.ex — otp_app pulls the config above; inline opts still override
+children = [
+  {Capstan, otp_app: :my_app, name: MyApp.Capstan},
+  {Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}
+]
 
 # once, at deploy time (idempotent)
 Capstan.Storage.Postgres.migrate!(db_url)
-
-# application.ex
-children = [
-  {Capstan,
-   name: MyApp.Capstan,
-   storage: [adapter: :postgres, url: db_url],
-   queues: [default: 10, mailers: [limit: 20]],
-   crons: [[name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]]},
-  {Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}
-]
 ```
+
+Prefer everything inline in the supervision tree? That works too — pass the
+same keys to `{Capstan, name: ..., storage: ..., queues: ...}` and skip
+`otp_app`.
 
 ```elixir
 defmodule MyApp.WelcomeEmail do
