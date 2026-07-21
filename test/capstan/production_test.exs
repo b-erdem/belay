@@ -86,7 +86,12 @@ defmodule Capstan.ProductionTest do
 
   test "stats, list_jobs, and retry_job", %{name: name} do
     {:ok, _ok} = Capstan.insert(name, Echo.new(%{}))
-    {:ok, bad} = Capstan.insert(name, Capstan.Test.Tagged.new(%{"tag" => "x", "fail" => true}, max_attempts: 1))
+
+    {:ok, bad} =
+      Capstan.insert(
+        name,
+        Capstan.Test.Tagged.new(%{"tag" => "x", "fail" => true}, max_attempts: 1)
+      )
 
     Testing.drain(name, :default)
 
@@ -95,7 +100,8 @@ defmodule Capstan.ProductionTest do
     assert [%{id: failed_id}] = Capstan.list_jobs(name, state: :failed)
     assert failed_id == bad.id
 
-    assert {:error, :not_retryable} = Capstan.retry_job(name, hd(Capstan.list_jobs(name, state: :succeeded)).id)
+    assert {:error, :not_retryable} =
+             Capstan.retry_job(name, hd(Capstan.list_jobs(name, state: :succeeded)).id)
 
     {:ok, retried} = Capstan.retry_job(name, bad.id)
 

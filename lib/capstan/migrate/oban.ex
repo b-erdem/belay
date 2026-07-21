@@ -81,8 +81,7 @@ defmodule Capstan.Migrate.Oban do
       states: states,
       pending: Enum.sum(for {s, n} <- states, s in @pending, do: n),
       executing: Map.get(states, "executing", 0),
-      historical:
-        Enum.sum(for {s, n} <- states, s in ~w(completed discarded cancelled), do: n),
+      historical: Enum.sum(for {s, n} <- states, s in ~w(completed discarded cancelled), do: n),
       workers: workers,
       unported: Enum.reject(workers, & &1.ported),
       already_migrated: already,
@@ -131,7 +130,11 @@ defmodule Capstan.Migrate.Oban do
 
   @doc false
   # One Oban row -> Capstan insert params. Public-shaped for tests.
-  def convert([id, worker, queue, args, state, attempt, max_attempts, priority, scheduled_at, errors], kinds, now) do
+  def convert(
+        [id, worker, queue, args, state, attempt, max_attempts, priority, scheduled_at, errors],
+        kinds,
+        now
+      ) do
     ready_at =
       case state do
         # Available work is claimable immediately; scheduled/retryable keep

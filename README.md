@@ -1,5 +1,6 @@
 <p align="center"><strong>⚓ Capstan</strong></p>
-<p align="center">A durable job engine for Elixir, on Postgres. Jobs are built from memoized steps — retries resume work instead of redoing it.</p>
+<p align="center"><strong>Durable execution for Elixir — without a workflow server.</strong></p>
+<p align="center">Resume at the first unfinished step. Add budgets, signals, DAGs, replay, and an embedded dashboard. Keep it all on Postgres.</p>
 
 <p align="center">
   <a href="https://github.com/b-erdem/capstan/actions/workflows/ci.yml"><img src="https://github.com/b-erdem/capstan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -10,11 +11,12 @@
 
 ![The embedded dashboard, live](assets/dashboard-live.gif)
 
-Classic job queues retry *whole jobs*. Capstan's unit of durability is the
-**step**: each step's result is journaled the moment it completes, so a
-retried job replays finished steps from the journal in microseconds and
-continues from the first unfinished one. The same journal carries cost
-accounting, an event stream, and a record you can re-execute to debug.
+Background jobs get awkward when one run contains twelve paid API calls, a
+human approval, and a fan-out across the cluster. Classic queues retry the
+*whole job*. Capstan makes the **step** the unit of recovery: once a step's
+result commits to the journal, later attempts replay it in microseconds and
+continue from the first unfinished step. The same journal powers spend
+accounting and replay debugging.
 
 Dependencies: Postgrex, Jason, telemetry — no Ecto requirement, no Redis,
 no separate service. Apache-2.0.
@@ -85,7 +87,7 @@ defmodule MyApp.ResearchPipeline do
 
   @impl Capstan.Worker
   def run(ctx) do
-    # Steps run at most once per job — a crash after :summarize never re-buys :transcribe.
+    # Committed steps replay from the journal; unfinished steps run again.
     text    = Capstan.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
     summary = Capstan.step(ctx, :summarize, fn -> llm!(text) end, cost: [usd: 0.02, tokens: 1200])
 
@@ -101,10 +103,15 @@ defmodule MyApp.ResearchPipeline do
   end
 end
 
-# Enforced caps and dedup at insert:
+# Attach a job budget and enforce uniqueness at insert:
 Capstan.insert(MyApp.Capstan,
   MyApp.ResearchPipeline.new(%{"url" => url}, budget: [usd: 1.00], unique: "research:#{url}"))
 ```
+
+Step bodies have **at-least-once execution until their result is committed**.
+If a process dies after an external side effect but before the journal write,
+that body can run again. Use provider idempotency keys or make external writes
+idempotent. Once the journal row exists, normal retries do not re-execute it.
 
 The same engine runs the unglamorous fleet — emails, webhooks, image
 processing, nightly crons — and the newer shapes those queues were never
@@ -120,18 +127,18 @@ outruns any dashboard. Capstan enforces spend in the engine, in three
 layers:
 
 ```elixir
-# 1. Per-job hard cap — one runaway job can never exceed its budget.
-#    Enforced BEFORE each step against durable spend (model-checked across
-#    crash/retry windows — not even kill -9 mid-failure buys an extra step).
+# 1. Per-job fail-after-crossing limit. The step that crosses the limit runs;
+#    no later unfinished step is admitted. Overshoot is bounded by that
+#    step's declared cost in the modeled single-attempt path.
 MyApp.ResearchPipeline.new(input, budget: [usd: 1.00])
 
-# 2. Fleet-wide cap per window — a resource bucket spans every queue that
-#    names it. Units are yours: tokens, or cents for an app-wide $/day cap.
+# 2. Fleet-wide admission budget per window — a resource bucket spans every
+#    queue that names it. Claims debit estimates atomically across the fleet.
 queues: [
   ai: [limit: 20,
        rate: [resource: "anthropic_tokens", allowed: 2_000_000, period: 60, estimate: 3_000]]
 ]
-# When the window is spent, claims stop; work queues instead of billing.
+# When the estimated allowance is spent, claims stop and work queues.
 
 # 3. True-up — the claim debits the estimate; inside the job you correct it
 #    with actuals, so the window converges on what the invoice will say.
@@ -143,10 +150,11 @@ Capstan.step(ctx, :summarize, fn ->
 end, cost: [usd: 0.02])
 ```
 
-Elsewhere, retries multiply spend — each attempt re-buys the work. Here
-they don't: finished steps replay from the journal at zero cost, and the
-budget check reads *durable* spend, so an attempt can never "forget" what
-previous attempts already paid.
+Committed steps replay from the journal at zero declared cost, and budget
+checks read durable spend, so a later attempt cannot forget recorded cost.
+As with any at-least-once system, an external charge made before a crash but
+not journaled may repeat and is not visible to Capstan; use the provider's
+idempotency mechanism for that window.
 
 ## Why it's built this way
 
@@ -180,7 +188,7 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 
 | | |
 |---|---|
-| Durable steps + budgets | `step/4` with `cost:`; `budget: [usd:, tokens:]` — retries replay, caps kill |
+| Durable steps + budgets | `step/4` with `cost:`; `budget: [usd:, tokens:]` — committed steps replay, jobs fail after crossing a limit |
 | Human-in-the-loop | `await/3` parks at zero cost; `signal_job/4` wakes instantly; deadlines |
 | Steering & cancellation | `steer/3` injects guidance mid-run; cooperative cancel at step boundaries |
 | Dynamic children | `spawn/3`, `await_children/1`, `map_children/5` — replay-safe runtime DAGs |
@@ -196,7 +204,7 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 | Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — change queues and schedules with no deploy |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with exactly-once slots |
 | Embedded dashboard | zero dependencies, one child spec — everything in the GIFs above |
-| MCP server | `mix capstan.mcp` — AI assistants inspect and operate the queue, mutations behind a pluggable authorizer |
+| MCP server | `mix capstan.mcp` — AI assistants inspect the queue; writes are disabled by default and require an authorizer or explicit opt-in |
 | Oban migration | `mix capstan.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
 
 ## Measured, not claimed
@@ -209,9 +217,11 @@ Numbers from this repo's reproducible harnesses on a laptop (Postgres 16):
 | Dispatch, cross-process + `pg_notify` | **11.0ms** p50 / 24.5ms p99 | `bench/run.sh` |
 | Throughput (unbatched acks, 3 workers) | ~416 jobs/s end-to-end | `bench/throughput.exs` |
 | Endurance soak (7h) | 99,004 jobs · 4,978 `kill -9` · 13 DB restarts — surfaced one real bug (below); **13/13 invariants** on the post-fix revalidation | `soak/run.sh` → reports in `soak/reports/` |
-| Model checking | **187,975,659 distinct states, zero violations** (TLC, complete to depth 49) | `verify/spec/` |
+| Durable-core model | Recorded complete TLC run: **187,975,659 distinct states, zero violations**, depth 49 | `verify/spec/RESULT.md` |
+| Trace conformance | **7/7 real execution traces admitted** (60/60 events), including crash/reclaim and cancel windows | `verify/traces/` (via `Attest.trace_check/2`) |
+| Attempt fencing | Complete 10-state model passes; removing the fence produces the expected zombie-ack counterexample | `verify/attempt_fence/` |
 | Schedule exploration | READ COMMITTED wake race reproduced + fix proven across 400 schedules | `verify/wake_protocol/` |
-| Suites | 119 (memory) + 129 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
+| Suites | 134 (Memory) + 144 (PostgreSQL), same behavioral suite plus PostgreSQL-only integration checks, `--warnings-as-errors` | `mix test` |
 
 Six real bugs were found by these harnesses before any user could: two by
 the chaos soak (a READ COMMITTED wake race among them), one by the 7-hour
@@ -247,13 +257,6 @@ map, the uniqueness translation, and the archive pattern for historical
 rows — with field notes from a real port that went 222/222 on the first
 run.
 
-## Polyglot by construction
-
-The Postgres schema **is** the protocol — specified in [SCHEMA.md](SCHEMA.md)
-with a dual ETF/JSON value envelope already in place. Python and TypeScript
-SDKs are planned as thin contract implementations (not rewrites), certified
-by the same soak harness, sharing one database with Elixir workers.
-
 ## Docs
 
 [Getting started](guides/getting-started.md) ·
@@ -269,10 +272,11 @@ by the same soak harness, sharing one database with Elixir workers.
 
 ## Status
 
-**1.0.0-rc.** Feature-complete; endurance-soaked, model-checked, and
-carrying its first real application — new, honestly: production miles are
-the one feature that can't be rushed. Post-1.0: SQLite storage, batched
-acking, Python/TypeScript SDKs.
+**1.0.0-rc.5.** The API is broad and the evidence is unusually deep for a new
+engine, but it is still a release candidate. Production miles are the one
+feature that cannot be compressed into a test suite; evaluate it against your
+failure modes before replacing a queue that already works. Post-1.0 candidates:
+SQLite storage, batched acking, and additional language clients.
 
 ## License
 

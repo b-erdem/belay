@@ -8,7 +8,7 @@ defmodule Capstan.MCPTest do
     {:ok, start_capstan!()}
   end
 
-  defp call(name, tool, args \\ %{}) do
+  defp call(name, tool, args \\ %{}, opts \\ []) do
     request = %{
       "jsonrpc" => "2.0",
       "id" => 1,
@@ -16,7 +16,7 @@ defmodule Capstan.MCPTest do
       "params" => %{"name" => tool, "arguments" => args}
     }
 
-    %{"result" => result} = MCP.handle_request(request, storage(name))
+    %{"result" => result} = MCP.handle_request(request, storage(name), opts)
 
     case result do
       %{"isError" => true, "content" => [%{"text" => text}]} -> {:error, text}
@@ -34,7 +34,10 @@ defmodule Capstan.MCPTest do
     assert MCP.handle_request(%{"method" => "notifications/initialized"}, storage(name)) == nil
 
     %{"result" => %{"tools" => tools}} =
-      MCP.handle_request(%{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"}, storage(name))
+      MCP.handle_request(
+        %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"},
+        storage(name)
+      )
 
     names = Enum.map(tools, & &1["name"])
 
@@ -105,25 +108,41 @@ defmodule Capstan.MCPTest do
     refute Map.get(retried, "isError", false)
   end
 
+  test "mutation tools are disabled by default", %{name: name} do
+    {:ok, job} = Capstan.insert(name, Tagged.new(%{"tag" => "x"}))
+
+    assert {:error, message} = call(name, "cancel_job", %{"id" => job.id})
+    assert message =~ "mutations are disabled"
+    assert job!(name, job.id).state == "ready"
+  end
+
   test "mutation tools operate jobs", %{name: name} do
-    {:ok, failed} = Capstan.insert(name, Tagged.new(%{"tag" => "f", "fail" => true}, max_attempts: 1))
+    {:ok, failed} =
+      Capstan.insert(name, Tagged.new(%{"tag" => "f", "fail" => true}, max_attempts: 1))
+
     {:ok, waiting} = Capstan.insert(name, Awaiter.new(%{}))
 
     Testing.drain(name, :default)
 
-    {:ok, retried} = call(name, "retry_job", %{"id" => failed.id})
+    {:ok, retried} = call(name, "retry_job", %{"id" => failed.id}, allow_mutations: true)
     assert retried["state"] == "ready"
 
     {:ok, signal_result} =
-      call(name, "signal", %{
-        "scope" => "job:#{waiting.id}",
-        "name" => "approval",
-        "payload" => %{"approved" => true}
-      })
+      call(
+        name,
+        "signal",
+        %{
+          "scope" => "job:#{waiting.id}",
+          "name" => "approval",
+          "payload" => %{"approved" => true}
+        },
+        allow_mutations: true
+      )
 
     assert signal_result["woke_jobs"] == [waiting.id]
 
-    {:ok, %{"cancel" => "cancelled"}} = call(name, "cancel_job", %{"id" => retried["id"]})
+    {:ok, %{"cancel" => "cancelled"}} =
+      call(name, "cancel_job", %{"id" => retried["id"]}, allow_mutations: true)
 
     assert {:error, text} = call(name, "get_job", %{"id" => 999_999})
     assert text =~ "not found"

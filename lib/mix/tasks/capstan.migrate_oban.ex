@@ -53,7 +53,10 @@ defmodule Mix.Tasks.Capstan.MigrateOban do
     Mix.Task.run("app.start")
 
     {:ok, conn} =
-      url |> Capstan.Storage.Postgres.parse_url() |> Keyword.put(:pool_size, 2) |> Postgrex.start_link()
+      url
+      |> Capstan.Storage.Postgres.parse_url()
+      |> Keyword.put(:pool_size, 2)
+      |> Postgrex.start_link()
 
     report = Capstan.Migrate.Oban.analyze(conn, mapping: mapping)
 
@@ -117,7 +120,9 @@ defmodule Mix.Tasks.Capstan.MigrateOban do
     end
 
     if report.already_migrated > 0 do
-      shell.info("#{report.already_migrated} rows were migrated by a previous run (will be skipped).")
+      shell.info(
+        "#{report.already_migrated} rows were migrated by a previous run (will be skipped)."
+      )
     end
   end
 end

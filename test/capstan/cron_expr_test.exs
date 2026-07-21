@@ -25,7 +25,6 @@ defmodule Capstan.CronExprTest do
     assert CronExpr.parse!("0 0 * * 7") |> CronExpr.matches?(~U[2026-01-04 00:00:00Z])
   end
 
-
   test "restricted day-of-month OR day-of-week matches either (standard cron rule)" do
     expr = CronExpr.parse!("0 0 15 * 1")
 

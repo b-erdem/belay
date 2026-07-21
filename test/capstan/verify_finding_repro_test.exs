@@ -42,8 +42,10 @@ defmodule Capstan.VerifyFindingReproTest do
     IO.inspect(reason, label: "control drain exit reason", limit: 4)
 
     after_job = job!(name, job.id)
+
     IO.inspect({after_job.state, after_job.attempt, after_job.errors},
-      label: "control job after drain")
+      label: "control job after drain"
+    )
 
     assert {:drained, %{ready: 1}} = reason
     assert after_job.state == "ready"
@@ -58,8 +60,10 @@ defmodule Capstan.VerifyFindingReproTest do
     IO.inspect(reason, label: "timeout-worker drain exit reason", limit: 4)
 
     after_job = job!(name, job.id)
+
     IO.inspect({after_job.state, after_job.attempt, after_job.errors},
-      label: "timeout-worker job after drain")
+      label: "timeout-worker job after drain"
+    )
 
     # If the finding is REAL: the probe dies with the raw RuntimeError (link
     # kill), the job is left leased in "running" with no error journaled.
@@ -75,6 +79,8 @@ defmodule Capstan.VerifyFindingReproTest do
         IO.inspect(other, label: "unexpected probe exit")
     end
 
-    IO.puts("job state after: #{after_job.state}, attempt: #{after_job.attempt}, errors: #{length(after_job.errors)}")
+    IO.puts(
+      "job state after: #{after_job.state}, attempt: #{after_job.attempt}, errors: #{length(after_job.errors)}"
+    )
   end
 end

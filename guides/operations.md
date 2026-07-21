@@ -110,8 +110,8 @@ exactly. Scale changes emit `[:capstan, :queue, :scale]`.
 
 For policy-driven scaling (queue depth thresholds, business hours, an
 operating agent watching costs), drive `Capstan.Queues.put/3` from your own
-logic — it's runtime CRUD, reconciled by every node, and it's exposed over
-MCP, so an agent can resize queues with the same tool call you would.
+logic — it is runtime CRUD reconciled by every node. The bundled MCP server
+does not currently expose queue-definition CRUD.
 
 ## Retention
 
@@ -138,7 +138,8 @@ One child spec, zero dependencies:
 Live queue tiles (with each queue's limits and rates), a filterable job
 list, a drawer with the full journal - steps with costs, events, errors,
 children - a rendered workflow DAG, and retry/cancel/signal/steer actions
-(gated by the same `authorizer:` contract as the MCP server). It binds
+(mutations require either a dashboard token or the same `authorizer:`
+contract as the MCP server; tokenless dashboards are read-only). It binds
 127.0.0.1 by default and speaks plain HTTP; front it with your proxy for
 remote access.
 
@@ -157,8 +158,9 @@ Capstan.events(MyApp.Capstan, job_id)      # the emitted stream
 Capstan.Replay.dry_run(MyApp.Capstan, job_id)  # what did it actually do?
 ```
 
-The same surface is exposed to AI assistants and scripts through
-`mix capstan.mcp`.
+The same inspection surface is exposed to AI assistants and scripts through
+`mix capstan.mcp`. Mutations are disabled unless you pass
+`--authorizer MyGuard` or explicitly opt in with `--allow-mutations`.
 
 ## Telemetry
 

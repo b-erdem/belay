@@ -136,13 +136,20 @@ defmodule Capstan.Config do
     Enum.map(notifiers, fn entry ->
       {module, nopts} =
         case entry do
-          :local -> {Capstan.Notifier.Local, []}
-          :postgres -> {Capstan.Notifier.Postgres, []}
+          :local ->
+            {Capstan.Notifier.Local, []}
+
+          :postgres ->
+            {Capstan.Notifier.Postgres, []}
+
           {shorthand, nopts} when shorthand in [:local, :postgres] ->
             {elem(normalize_notifiers([shorthand], opts) |> hd(), 0), nopts}
 
-          module when is_atom(module) -> {module, []}
-          {module, nopts} when is_atom(module) -> {module, nopts}
+          module when is_atom(module) ->
+            {module, []}
+
+          {module, nopts} when is_atom(module) ->
+            {module, nopts}
         end
 
       if module == Capstan.Notifier.Postgres and storage_mod != Capstan.Storage.Postgres do

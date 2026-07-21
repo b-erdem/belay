@@ -45,8 +45,10 @@ defmodule Capstan do
 
       Capstan.insert(MyCapstan, MyApp.Agent.new(%{"url" => url}, budget: [usd: 1.0]))
 
-  Steps are memoized per job — retries replay past completed work. Budgets
-  fail the job with `:budget_exceeded` when step costs cross the cap. Signals
+  Committed step results are memoized per job — retries replay past journaled
+  work. Step bodies remain at-least-once until the journal write commits.
+  Budgets fail the job with `:budget_exceeded` after a step's declared cost
+  crosses the limit. Signals
   (`Capstan.signal_job/4`) wake awaiting jobs instantly; `steer/3` injects
   guidance readable via `steering/1` at step boundaries.
 
@@ -165,7 +167,9 @@ defmodule Capstan do
       Job.new(
         worker,
         input,
-        opts |> Keyword.put(:now, now) |> Keyword.put(:encryption_key, Config.encryption_key(config)),
+        opts
+        |> Keyword.put(:now, now)
+        |> Keyword.put(:encryption_key, Config.encryption_key(config)),
         worker.__capstan_defaults__()
       )
 
@@ -243,7 +247,9 @@ defmodule Capstan do
   end
 
   @doc "Per-queue, per-state job counts."
-  @spec stats(instance()) :: %{optional(String.t()) => %{optional(String.t()) => non_neg_integer()}}
+  @spec stats(instance()) :: %{
+          optional(String.t()) => %{optional(String.t()) => non_neg_integer()}
+        }
   def stats(name) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
@@ -283,17 +289,16 @@ defmodule Capstan do
 
   @doc "Stop a queue's local producer from claiming (running jobs finish)."
   @spec pause_queue(instance(), atom() | String.t()) :: :ok | {:error, :no_producer}
-  def pause_queue(name, queue), do: send_producer(name, queue, :capstan_pause)
+  def pause_queue(name, queue), do: call_producer(name, queue, :capstan_pause)
 
   @doc "Resume a paused queue."
   @spec resume_queue(instance(), atom() | String.t()) :: :ok | {:error, :no_producer}
-  def resume_queue(name, queue), do: send_producer(name, queue, :capstan_resume)
+  def resume_queue(name, queue), do: call_producer(name, queue, :capstan_resume)
 
-  defp send_producer(name, queue, message) do
+  defp call_producer(name, queue, message) do
     case Registry.lookup(registry(name), {:producer, to_string(queue)}) do
       [{pid, _}] ->
-        send(pid, message)
-        :ok
+        GenServer.call(pid, message)
 
       _ ->
         {:error, :no_producer}
@@ -304,7 +309,8 @@ defmodule Capstan do
   Await a job's terminal result. Returns `{:ok, value}` for success,
   `{:error, {:job, state}}` for failure/cancellation, `{:error, :timeout}`.
   """
-  @spec await_result(instance(), integer(), timeout()) :: {:ok, term()} | {:error, {:job, :failed | :cancelled} | :timeout}
+  @spec await_result(instance(), integer(), timeout()) ::
+          {:ok, term()} | {:error, {:job, :failed | :cancelled} | :timeout}
   def await_result(name, id, timeout \\ 5_000) do
     config = Config.fetch!(name)
 
@@ -312,10 +318,14 @@ defmodule Capstan do
 
     check = fn ->
       case get_job(name, id) do
-        {:ok, %Job{state: "succeeded"} = job} -> {:ok, Job.result(job)}
+        {:ok, %Job{state: "succeeded"} = job} ->
+          {:ok, Job.result(job)}
+
         {:ok, %Job{state: state}} when state in ~w(failed cancelled) ->
           {:error, {:job, String.to_atom(state)}}
-        _ -> :pending
+
+        _ ->
+          :pending
       end
     end
 
@@ -361,8 +371,13 @@ defmodule Capstan do
     {storage, ref} = config.storage_ref
 
     {:ok, woken} =
-      storage.put_signal(ref, to_string(scope), to_string(signal_name), payload,
-        Config.now(config))
+      storage.put_signal(
+        ref,
+        to_string(scope),
+        to_string(signal_name),
+        payload,
+        Config.now(config)
+      )
 
     woken |> Enum.map(& &1.queue) |> Enum.uniq() |> Enum.each(&poke(config, &1))
 
@@ -390,7 +405,14 @@ defmodule Capstan do
 
   # -- In-job APIs (take the ctx) -----------------------------------------------
 
-  @doc "Run `fun` at most once per job; memoized with optional `cost: [usd:, tokens:]`."
+  @doc """
+  Run and memoize `fun` under a per-job step name, with optional
+  `cost: [usd:, tokens:]`.
+
+  A committed result is replayed without re-running `fun`. The body is
+  at-least-once until that journal write commits, so external effects should
+  be idempotent across a crash-before-journal window.
+  """
   @spec step(Ctx.t(), String.t() | atom(), (-> term()), keyword()) :: term()
   def step(%Ctx{} = ctx, step_name, fun, opts \\ []) when is_function(fun, 0) do
     Runner.step(ctx, step_name, fun, opts)

@@ -16,7 +16,7 @@ defmodule MyApp.ResearchAgent do
     goal = ctx.job.input["goal"]
 
     Enum.reduce_while(1..20, %{messages: [system_prompt(goal)]}, fn n, state ->
-      # One LLM turn = one step: a crash re-buys zero tokens.
+      # Once a turn commits, later attempts replay it without another call.
       turn =
         Capstan.step(ctx, "turn-#{n}", fn -> llm_turn!(state.messages) end,
           cost: [usd: turn_cost(), tokens: turn_tokens()])
@@ -32,10 +32,12 @@ defmodule MyApp.ResearchAgent do
 end
 ```
 
-Everything in that loop is durable: the turns are journaled, progress streams
+The loop's committed checkpoints are durable: turns are journaled, progress streams
 out through `emit/2`, an operator can `Capstan.steer/3` new instructions that
-the next boundary picks up, and a `budget:` on insert kills the run at the
-spend cap — with the journal intact for the post-mortem.
+the next boundary picks up, and a `budget:` on insert fails the run after a
+step crosses the configured limit — with the journal intact for the
+post-mortem. A provider call can still repeat in the crash-before-journal
+window; pass `{job_id, step_name}` as its idempotency key when supported.
 
 ## Human in the loop
 
@@ -51,7 +53,8 @@ end
 
 `await/3` parks the job — zero processes, zero cost — until
 `Capstan.signal_job(name, job_id, :approval, %{"approved" => true})` arrives
-from your review UI (or from the MCP `signal` tool). Signals are durable:
+from your review UI (or from the MCP `signal` tool after enabling authorized
+mutations). Signals are durable:
 delivered before the job asks, they're found immediately; races cost latency,
 never correctness.
 
@@ -118,11 +121,11 @@ per child, not poll intervals.
 ## Let agents operate the queue
 
 `mix capstan.mcp --url postgres://...` serves an MCP server any assistant can
-use to check `stats`, read a job's steps and events, `retry_job`,
-`cancel_job`, deliver a `signal`, or `steer_job` — the infrastructure your
-agents run on becomes infrastructure your agents can also inspect and fix.
+use to check `stats` and read jobs, steps, events, and workflows. Mutation
+tools (`retry_job`, `cancel_job`, `signal`, `steer_job`) are advertised but
+disabled by default.
 
-**Authority for operating agents.** Mutating MCP tools accept a pluggable
+**Authority for operating agents.** Enable writes with a pluggable
 authorizer (`mix capstan.mcp --authorizer MyGuard`, or `authorizer:` on
 `Capstan.MCP.serve/2`): a module deciding `authorize(tool, args) → :ok |
 {:error, msg}` before any retry/cancel/signal/steer executes. This is the
@@ -132,3 +135,7 @@ offline and let a supervising agent steer only the jobs its token attenuates
 to. The same idea extends to spawn chains: carry a grant in job `meta` and
 attenuate it in `spawn/3` inputs, so a child agent can never hold more
 authority than its parent.
+
+For a trusted local client you may instead pass `--allow-mutations`, but an
+authorizer is the safer default whenever another agent or user can reach the
+MCP process.

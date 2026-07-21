@@ -67,7 +67,9 @@ defmodule Capstan.InputSchema do
   end
 
   def validate!(worker, _schema, input) do
-    raise Capstan.InputError, worker: worker, errors: [{"input", "must be a map, got: #{inspect(input)}"}]
+    raise Capstan.InputError,
+      worker: worker,
+      errors: [{"input", "must be a map, got: #{inspect(input)}"}]
   end
 
   defp cast(:string, value) when is_binary(value), do: :ok

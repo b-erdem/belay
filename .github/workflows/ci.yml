@@ -12,8 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.15", "1.17"]
-        storage: [memory, postgres]
+        include:
+          - {elixir: "1.15", otp: "26", storage: memory}
+          - {elixir: "1.15", otp: "26", storage: postgres}
+          - {elixir: "1.17", otp: "27", storage: memory}
+          - {elixir: "1.17", otp: "27", storage: postgres}
+          - {elixir: "1.19", otp: "28", storage: memory}
+          - {elixir: "1.19", otp: "28", storage: postgres}
 
     services:
       postgres:
@@ -34,14 +39,14 @@ jobs:
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: ${{ matrix.elixir }}
-          otp-version: "26"
+          otp-version: ${{ matrix.otp }}
 
       - uses: actions/cache@v4
         with:
           path: |
             deps
             _build
-          key: mix-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+          key: mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ matrix.storage }}-${{ hashFiles('mix.lock') }}
 
       - run: mix deps.get
 
@@ -54,3 +59,44 @@ jobs:
         if: matrix.storage == 'postgres'
         env:
           CAPSTAN_PG: "1"
+
+  quality:
+    name: Format, docs, and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - run: mix deps.get
+      - run: mix deps.unlock --check-unused
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix docs --warnings-as-errors
+      - run: mix hex.build
+
+  formal-smoke:
+    name: Formal smoke and mutation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned TLA+ tools
+        run: |
+          curl --fail --location --output /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  /tmp/tla2tools.jar" | sha1sum --check
+
+      - name: Parse canonical model
+        run: java -cp /tmp/tla2tools.jar tla2sany.SANY verify/spec/Spec.tla
+
+      - name: Check attempt fence and prove all four mutants fail
+        run: TLA2TOOLS_JAR=/tmp/tla2tools.jar verify/check.sh

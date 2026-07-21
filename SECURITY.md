@@ -2,8 +2,11 @@
 
 Capstan executes your code against your database; the engine itself holds no
 credentials beyond the storage URL you give it, and the dashboard/MCP
-surfaces are operator tools intended for trusted networks (bind localhost or
-front with your proxy; use `token:` and `authorizer:`).
+surfaces are operator tools intended for trusted networks. Both are read-only
+by default when no authority is configured: dashboard writes require `token:`
+or `authorizer:`, and MCP writes require `--authorizer` or the explicit
+`--allow-mutations` opt-in. Bind localhost or front the dashboard with a TLS
+proxy for remote access.
 
 ## Reporting a vulnerability
 
@@ -20,4 +23,8 @@ patch releases with credit unless you prefer otherwise.
 - Encrypted inputs are AES-256-GCM envelopes (`Capstan.Job`); keys come from
   your MFA config and are never persisted or logged by Capstan.
 - The dashboard's HTTP server is intentionally minimal (no TLS); deployment
-  guidance lives in the operations guide.
+  guidance lives in the operations guide. Mutations require JSON, reject a
+  mismatched browser `Origin`, cap request bodies at 1 MiB, and reject
+  ambiguous or unsupported request framing. Request headers are capped at 100
+  fields / 64 KiB. Query-string tokens are accepted for GET/SSE only, never
+  for mutations.

@@ -43,8 +43,7 @@ pre-launch adversarial review.
   node's limit up while claim rounds come back saturated and decays it when
   the queue idles — leaderless, like the burst-poll cadence it mirrors, and
   exactly bounded by `global_limit`/rate/partition limits. Policy-driven
-  scaling stays a recipe: drive runtime `Queues.put/3` (also over MCP, so an
-  agent can do it).
+  scaling stays a recipe: drive runtime `Queues.put/3` from application code.
 
 - **Dashboard v2.** KPI strip with live throughput and **spend-rate**
   sparklines (trailing-window snapshots persisted client-side), queue rows
@@ -63,6 +62,25 @@ pre-launch adversarial review.
   by design — the guide documents the archive pattern instead.
 
 ### Fixed
+- **Dashboard and MCP mutations now fail closed.** A tokenless dashboard and
+  the MCP server are read-only unless an authorizer or explicit mutation
+  opt-in is configured. Dashboard writes reject query-string credentials,
+  cross-origin requests, non-object/malformed JSON, bodies over 1 MiB, large
+  header sets, and ambiguous request framing. Bearer-token comparison uses a
+  constant-time digest check.
+- **PostgreSQL URLs now match deployment reality.** Percent-encoded
+  credentials/database names, Unix-socket hosts, connection query options,
+  and secure `sslmode` values are parsed and tested; unsupported ambiguous
+  TLS modes fail with a configuration error instead of silently weakening a
+  connection. Explicit child-spec options retain precedence over URL values.
+- **Queue pause/resume is synchronous.** The API now returns only after the
+  producer has changed state, closing the race where a caller could pause a
+  queue and immediately observe one more claim.
+- **Zombie acknowledgements have a dedicated proof and dual-adapter
+  regression.** A stale attempt cannot commit after lease expiry and reclaim;
+  the focused TLA+ model completely checks the fence, while its no-fence
+  mutant produces the expected `Claim(1) → Expire(1) → Claim(2) → Ack(1)`
+  counterexample.
 - **Operator retry now clears a pending cancel and respects workflow
   dependencies.** Found by extending the TLA+ model with a `Retry` action:
   (1) retry left `cancel_requested` set, so a cooperatively-cancelled job
@@ -100,8 +118,8 @@ enqueue, runtime CRUD, encryption, and exact partitioned claims.
   (hand-rolled HTTP over `gen_tcp`, single-file UI, SSE live updates): queue
   tiles with limits and live counts, filterable job list, a journal drawer
   (steps with costs, events, errors, children), a rendered **workflow DAG**,
-  and retry/cancel/signal/steer actions behind an optional token and the same
-  pluggable authorizer as the MCP server.
+  and retry/cancel/signal/steer actions. Tokenless dashboards are read-only;
+  writes require a token or the same pluggable authorizer as the MCP server.
 - **`Capstan.Txn`** — transactional enqueue inside your own Postgrex or Ecto
   transaction (duck-typed over `query!`; still no Ecto dependency). With the
   `:postgres` notifier, the wake-up is issued via `pg_notify` *inside* the

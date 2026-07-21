@@ -93,7 +93,7 @@ a term binary, and **cost columns (`tokens`, `usd_micros`) recorded beside the
 value**. That makes three features fall out of the schema instead of being
 bolted on:
 
-- **Replay**: a retried job skips completed steps — an agent loop crash
+- **Replay**: a retried job skips journaled steps — an agent loop crash
   re-buys zero tokens.
 - **Budgets**: `Capstan.insert(..., budget: [usd: 5.00])` — the engine checks
   accumulated spend at every step boundary and fails the job with

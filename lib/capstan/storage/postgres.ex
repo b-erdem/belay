@@ -23,33 +23,140 @@ defmodule Capstan.Storage.Postgres do
 
   @impl Capstan.Storage
   def child_spec({config, opts}) do
+    url = Keyword.fetch!(opts, :url)
+
     start_opts =
-      opts
-      |> Keyword.fetch!(:url)
+      url
       |> parse_url()
-      |> Keyword.merge(
-        name: ref(config.name),
-        pool_size: Keyword.get(opts, :pool_size, 10),
-        types: Capstan.Storage.PostgresTypes
-      )
+      |> Keyword.merge(Keyword.delete(opts, :url))
+      |> Keyword.put_new(:pool_size, 10)
+      |> Keyword.put(:name, ref(config.name))
+      |> Keyword.put(:types, Capstan.Storage.PostgresTypes)
 
     %{id: __MODULE__, start: {Postgrex, :start_link, [start_opts]}}
   end
 
   def ref(instance_name), do: Module.concat(instance_name, "Storage")
 
-  @doc false
+  @doc """
+  Convert a PostgreSQL URL into Postgrex options.
+
+  Credentials and database names are percent-decoded. TLS follows libpq's
+  `sslmode` meaning rather than collapsing every mode to one boolean:
+
+    * `disable` → no TLS
+    * `require` (also `ssl=true`) → **encrypt without certificate
+      verification** (`ssl: [verify: :verify_none]`), matching libpq — so a
+      managed-Postgres URL like `?sslmode=require` connects without needing
+      the server's CA in your trust store
+    * `verify-ca` / `verify-full` → verified TLS (`ssl: true`), which in
+      current Postgrex checks the certificate chain against the system CA
+      store; provide `cacerts:` via an explicit `ssl:` option if your CA is
+      not there
+    * `allow` / `prefer` → rejected (they need TLS fallback negotiation
+      Postgrex does not implement)
+
+  Explicit storage options are merged after these URL-derived options by
+  `child_spec/1`, so callers may override with a custom `ssl:` keyword list,
+  socket options, timeouts, or other Postgrex settings.
+  """
   def parse_url(url) do
     uri = URI.parse(url)
+
+    unless uri.scheme in ["postgres", "postgresql"] do
+      raise ArgumentError, "expected a postgres:// or postgresql:// URL, got: #{inspect(url)}"
+    end
+
+    query = URI.decode_query(uri.query || "")
     [username, password] = String.split(uri.userinfo || "postgres", ":", parts: 2) |> pad2()
 
-    [
-      hostname: uri.host || "localhost",
-      port: uri.port || 5432,
-      username: username,
-      password: password || "",
-      database: String.trim_leading(uri.path || "/capstan", "/")
-    ]
+    endpoint =
+      case query["host"] do
+        "/" <> _ = socket_dir -> [socket_dir: socket_dir]
+        hostname when is_binary(hostname) -> [hostname: hostname, port: uri.port || 5432]
+        nil -> [hostname: uri.host || "localhost", port: uri.port || 5432]
+      end
+
+    endpoint ++
+      [
+        username: URI.decode(username),
+        password: URI.decode(password || ""),
+        database: uri.path |> default_database() |> URI.decode()
+      ] ++ query_opts(query)
+  end
+
+  defp default_database(nil), do: "capstan"
+  defp default_database(""), do: "capstan"
+  defp default_database(path), do: String.trim_leading(path, "/")
+
+  defp query_opts(query) do
+    []
+    |> maybe_put_ssl(query)
+    |> maybe_put_integer(query, "connect_timeout", :connect_timeout)
+    |> maybe_put_integer(query, "handshake_timeout", :handshake_timeout)
+    |> maybe_put_integer(query, "pool_size", :pool_size)
+    |> maybe_put_integer(query, "queue_target", :queue_target)
+    |> maybe_put_integer(query, "queue_interval", :queue_interval)
+    |> maybe_put_parameter(query, "application_name", :application_name)
+  end
+
+  defp maybe_put_ssl(opts, query) do
+    value = query["sslmode"] || query["ssl"]
+
+    case value do
+      nil ->
+        opts
+
+      value when value in ["disable", "false", "0"] ->
+        Keyword.put(opts, :ssl, false)
+
+      # libpq `require`: encrypt, but do not verify the certificate. Mapping
+      # this to a verifying `ssl: true` would break connections that libpq
+      # accepts (managed Postgres whose CA isn't in the local trust store).
+      value when value in ["require", "true", "1"] ->
+        Keyword.put(opts, :ssl, verify: :verify_none)
+
+      # verify-ca / verify-full explicitly asked for verification.
+      value when value in ["verify-ca", "verify-full"] ->
+        Keyword.put(opts, :ssl, true)
+
+      value when value in ["allow", "prefer"] ->
+        raise ArgumentError,
+              "sslmode=#{value} requires TLS fallback negotiation, which Postgrex does not provide; " <>
+                "use sslmode=require or pass an explicit ssl: option"
+
+      value ->
+        raise ArgumentError, "unsupported PostgreSQL SSL mode: #{inspect(value)}"
+    end
+  end
+
+  defp maybe_put_integer(opts, query, query_key, option_key) do
+    case query[query_key] do
+      nil -> opts
+      value -> Keyword.put(opts, option_key, parse_positive_integer!(query_key, value))
+    end
+  end
+
+  defp parse_positive_integer!(key, value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _ -> raise ArgumentError, "#{key} must be a positive integer, got: #{inspect(value)}"
+    end
+  end
+
+  defp maybe_put_parameter(opts, query, query_key, parameter_key) do
+    case query[query_key] do
+      nil ->
+        opts
+
+      value ->
+        Keyword.update(
+          opts,
+          :parameters,
+          [{parameter_key, value}],
+          &[{parameter_key, value} | &1]
+        )
+    end
   end
 
   defp pad2([a]), do: [a, ""]
@@ -569,15 +676,24 @@ defmodule Capstan.Storage.Postgres do
         i = length(params) + 1
 
         case filter do
-          {:queue, v} -> {["queue = $#{i}" | clauses], params ++ [to_string(v)]}
-          {:state, v} -> {["state = $#{i}" | clauses], params ++ [to_string(v)]}
+          {:queue, v} ->
+            {["queue = $#{i}" | clauses], params ++ [to_string(v)]}
+
+          {:state, v} ->
+            {["state = $#{i}" | clauses], params ++ [to_string(v)]}
+
           {:worker, v} ->
             kind = v |> to_string() |> String.replace_prefix("Elixir.", "")
             {["kind = $#{i}" | clauses], params ++ [kind]}
 
-          {:workflow_id, v} -> {["workflow_id = $#{i}" | clauses], params ++ [v]}
-          {:parent_id, v} -> {["parent_id = $#{i}" | clauses], params ++ [v]}
-          {:before_id, v} -> {["id < $#{i}" | clauses], params ++ [v]}
+          {:workflow_id, v} ->
+            {["workflow_id = $#{i}" | clauses], params ++ [v]}
+
+          {:parent_id, v} ->
+            {["parent_id = $#{i}" | clauses], params ++ [v]}
+
+          {:before_id, v} ->
+            {["id < $#{i}" | clauses], params ++ [v]}
         end
       end)
 
@@ -663,7 +779,8 @@ defmodule Capstan.Storage.Postgres do
             true ->
               %{released: released, cancelled: cancelled} =
                 apply_and_settle(conn, job, {:cancelled, %{"reason" => "cancel"}}, now,
-                  fence: false)
+                  fence: false
+                )
 
               %{status: :cancelled, cancelled: cancelled, released: released}
           end
@@ -949,7 +1066,14 @@ defmodule Capstan.Storage.Postgres do
 
     entries =
       for [name, expression, worker, input, opts, paused] <- rows do
-        %{name: name, expression: expression, worker: worker, input: input, opts: opts, paused: paused}
+        %{
+          name: name,
+          expression: expression,
+          worker: worker,
+          input: input,
+          opts: opts,
+          paused: paused
+        }
       end
 
     {:ok, entries}
@@ -999,7 +1123,9 @@ defmodule Capstan.Storage.Postgres do
   end
 
   defp unwrap({:ok, value}), do: {:ok, value}
-  defp unwrap({:error, reason}), do: raise("capstan postgres transaction failed: #{inspect(reason)}")
+
+  defp unwrap({:error, reason}),
+    do: raise("capstan postgres transaction failed: #{inspect(reason)}")
 
   defp q!(conn_or_ref, sql, params), do: Postgrex.query!(conn_or_ref, sql, params)
 
@@ -1156,7 +1282,9 @@ defmodule Capstan.Storage.Postgres do
     end
 
     {:ok, conn} =
-      opts |> Keyword.put(:database, "postgres") |> Keyword.put(:pool_size, 1)
+      opts
+      |> Keyword.put(:database, "postgres")
+      |> Keyword.put(:pool_size, 1)
       |> Postgrex.start_link()
 
     case Postgrex.query!(conn, "SELECT 1 FROM pg_database WHERE datname = $1", [database]) do
@@ -1195,7 +1323,9 @@ defmodule Capstan.Storage.Postgres do
 
   defp with_conn(url, fun) do
     {:ok, conn} =
-      url |> parse_url() |> Keyword.put(:pool_size, 1)
+      url
+      |> parse_url()
+      |> Keyword.put(:pool_size, 1)
       |> Keyword.put(:types, Capstan.Storage.PostgresTypes)
       |> Postgrex.start_link()
 

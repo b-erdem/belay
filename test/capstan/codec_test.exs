@@ -15,7 +15,14 @@ defmodule Capstan.CodecTest do
     now = Capstan.Config.now(config(name))
 
     {:ok, _} =
-      mod.put_step(ref, job.id, "a", ~s({"lang":"python","n":7}), %{usd_micros: 0, tokens: 0}, now)
+      mod.put_step(
+        ref,
+        job.id,
+        "a",
+        ~s({"lang":"python","n":7}),
+        %{usd_micros: 0, tokens: 0},
+        now
+      )
 
     assert %{succeeded: 1} = Testing.drain(name, :default)
 

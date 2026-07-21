@@ -8,7 +8,8 @@ defmodule Capstan.MCP do
 
   Read tools: `stats`, `list_jobs`, `get_job` (with steps, events, children),
   `workflow_status`. Write tools (clearly named as mutations): `retry_job`,
-  `cancel_job`, `signal`, `steer_job`.
+  `cancel_job`, `signal`, `steer_job`. Mutations are disabled by default;
+  configure an `:authorizer` or explicitly set `allow_mutations: true`.
 
   The server talks JSON-RPC 2.0 over newline-delimited stdio and needs only
   database access — no running Capstan instance required.
@@ -32,6 +33,8 @@ defmodule Capstan.MCP do
       capability systems such as [Legant](https://github.com/legant-dev/legant):
       verify the caller's grant offline and deny anything the token doesn't
       attenuate to.
+    * `:allow_mutations` — explicitly enable every mutation without an
+      authorizer (default `false`); intended only for a trusted local client.
   """
   def serve(storage, opts \\ []) do
     case IO.read(:stdio, :line) do
@@ -93,7 +96,13 @@ defmodule Capstan.MCP do
       ) do
     args = Map.get(params, "arguments", %{})
 
-    with :ok <- authorize(Keyword.get(opts, :authorizer), tool, args),
+    with :ok <-
+           authorize(
+             Keyword.get(opts, :authorizer),
+             Keyword.get(opts, :allow_mutations, false),
+             tool,
+             args
+           ),
          {:ok, data} <- call_tool(tool, args, storage) do
       result(id, %{
         "content" => [%{"type" => "text", "text" => Jason.encode!(data, pretty: true)}]
@@ -115,10 +124,16 @@ defmodule Capstan.MCP do
 
   @mutating_tools ~w(retry_job cancel_job signal steer_job)
 
-  defp authorize(nil, _tool, _args), do: :ok
-  defp authorize(_authorizer, tool, _args) when tool not in @mutating_tools, do: :ok
+  defp authorize(_authorizer, _allow_mutations, tool, _args) when tool not in @mutating_tools,
+    do: :ok
 
-  defp authorize(authorizer, tool, args) do
+  defp authorize(nil, true, _tool, _args), do: :ok
+
+  defp authorize(nil, false, _tool, _args) do
+    {:error, "mutations are disabled; configure an authorizer or pass allow_mutations: true"}
+  end
+
+  defp authorize(authorizer, _allow_mutations, tool, args) do
     case run_authorizer(authorizer, tool, args) do
       :ok -> :ok
       {:error, message} -> {:error, "unauthorized: #{message}"}
@@ -149,9 +164,14 @@ defmodule Capstan.MCP do
         %{"id" => %{"type" => "integer"}},
         ["id"]
       ),
-      tool("workflow_status", "State counts and completion for a workflow or batch.", %{
-        "workflow_id" => %{"type" => "string"}
-      }, ["workflow_id"]),
+      tool(
+        "workflow_status",
+        "State counts and completion for a workflow or batch.",
+        %{
+          "workflow_id" => %{"type" => "string"}
+        },
+        ["workflow_id"]
+      ),
       tool(
         "retry_job",
         "MUTATES: resurrect a failed or cancelled job for another run.",
@@ -293,7 +313,6 @@ defmodule Capstan.MCP do
   @doc false
   defdelegate event_summary(event), to: Capstan.View
 
-
   defp result(id, payload), do: %{"jsonrpc" => "2.0", "id" => id, "result" => payload}
 
   defp error_response(id, code, message) do
@@ -313,14 +332,18 @@ defmodule Mix.Tasks.Capstan.Mcp do
 
   The URL may also come from the `CAPSTAN_URL` environment variable. Add it to
   an MCP client config to let AI assistants inspect queues, jobs, steps, and
-  events, and retry/cancel/signal/steer jobs.
+  events. Mutation tools are read-only by default; pass `--authorizer MyGuard`
+  for policy-gated writes or `--allow-mutations` to opt in explicitly.
   """
 
   use Mix.Task
 
   @impl Mix.Task
   def run(argv) do
-    {opts, _rest} = OptionParser.parse!(argv, strict: [url: :string, authorizer: :string])
+    {opts, _rest} =
+      OptionParser.parse!(argv,
+        strict: [url: :string, authorizer: :string, allow_mutations: :boolean]
+      )
 
     url =
       opts[:url] || System.get_env("CAPSTAN_URL") ||
@@ -347,6 +370,9 @@ defmodule Mix.Tasks.Capstan.Mcp do
 
     {:ok, _} = Postgrex.start_link(conn_opts)
 
-    Capstan.MCP.serve({Capstan.Storage.Postgres, Capstan.MCP.Conn}, authorizer: authorizer)
+    Capstan.MCP.serve({Capstan.Storage.Postgres, Capstan.MCP.Conn},
+      authorizer: authorizer,
+      allow_mutations: opts[:allow_mutations] || false
+    )
   end
 end

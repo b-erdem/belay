@@ -16,11 +16,17 @@ def run(ctx) do
 end
 ```
 
-A step runs **at most once per job**. Its return value is serialized
-(`:erlang.term_to_binary/1`) into the job's journal keyed by name; every
-later attempt returns the stored value without executing the function. If
-the job crashes after `:summarize`, the retry replays `:transcribe` and
-`:summarize` from the journal in microseconds and resumes at `:store`.
+A step's **committed result is memoized once per job and name**. Its return
+value is serialized (`:erlang.term_to_binary/1`) into the journal; every later
+attempt that sees that row returns the stored value without executing the
+function.
+
+The body itself is at-least-once until that write commits. A crash after an
+external side effect but before the journal write can execute the body again.
+Use a provider idempotency key derived from `{job_id, step_name}`, or make the
+effect naturally idempotent. If the job crashes after `:summarize` has
+committed, the retry replays `:transcribe` and `:summarize` in microseconds and
+resumes at `:store`.
 
 ## Semantics worth internalizing
 
@@ -33,7 +39,7 @@ the job crashes after `:summarize`, the retry replays `:transcribe` and
   a 1 MB per-value limit to keep the journal honest (store large artifacts
   elsewhere and memoize the reference).
 - **Steps are the cancellation and budget checkpoints.** Cooperative
-  cancellation and budget caps take effect at step boundaries — long-running
+  cancellation and budget limits take effect at step boundaries — long-running
   step *functions* should be as small as the work allows.
 
 ## Durable sleep
@@ -51,20 +57,25 @@ sleep, and runs `:follow_up`.
 
 ## Costs and budgets
 
-Steps carry cost columns (`usd`, `tokens`). Budgets turn them into a
-guarantee:
+Steps carry declared cost columns (`usd`, `tokens`). Budgets provide a
+fail-after-crossing limit:
 
 ```elixir
 Capstan.insert(MyApp.Capstan,
   MyApp.ResearchAgent.new(%{"topic" => topic}, budget: [usd: 5.00, tokens: 500_000]))
 ```
 
-The engine checks accumulated spend against the budget both *before* running
-each step body (against durable spend, so not even a crash mid-failure can
-buy an extra step on retry) and *after* recording its cost, failing the job
-with `:budget_exceeded` the moment either cap is crossed. The failed job
-keeps its journal — you can inspect exactly which steps spent what with
-`Capstan.steps/2`.
+The engine checks accumulated spend both *before* each unfinished step and
+*after* recording its declared cost. The crossing step runs, commits, and then
+fails the job with `:budget_exceeded`; later unfinished steps are refused. In
+the modeled single-attempt path, overshoot is bounded by one step's declared
+cost. The failed job keeps its journal, so `Capstan.steps/2` shows exactly what
+Capstan recorded.
+
+This is not a payment-provider hard stop. Actual usage can differ from the
+declared estimate, and a provider charge made in the crash-before-journal
+window can repeat. Reconcile actuals with `Capstan.debit/3` and use provider
+idempotency keys when a true external-spend guarantee matters.
 
 ## The journal is a debugging asset
 

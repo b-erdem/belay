@@ -9,9 +9,9 @@
 (* relies on, all of which must survive a kill -9 (crash) + lease-expiry     *)
 (* reclaim:                                                                  *)
 (*                                                                          *)
-(*   * Step journaling is at-most-once per (job, name) and memoized on       *)
-(*     replay (runner.ex step/4 lines 170-206; PK (job_id,name) with        *)
-(*     ON CONFLICT DO NOTHING).                                             *)
+(*   * Journaled step results replay without re-executing that step name.    *)
+(*     Exec+journal is atomic in this abstraction; body-before-journal       *)
+(*     duplicate execution is outside the modeled property.                 *)
 (*   * The BUDGET PRE-FLIGHT check: a step body must NOT run when the        *)
 (*     durable spend already exceeds the cap (runner.ex:188 check_budget!    *)
 (*     BEFORE fun.()).  This is the fix the 7h endurance soak forced         *)
@@ -321,9 +321,9 @@ TypeOK ==
 NoExecutionPastBudget ==
   \A j \in Jobs : spent[j] <= Budget[j] + MaxCost[j]
 
-\* Property 3 (INVARIANT #3).  Every step body executes at most once per
-\* (job, name); memoized replay must not re-run a journaled step.
-StepsJournaledAtMostOnce ==
+\* Property 3. Memoized replay must not re-run a journaled step within the
+\* atomic Exec+journal abstraction.
+JournaledStepsNotReexecuted ==
   \A j \in Jobs : \A n \in StepNames : execCount[j][n] <= 1
 
 \* Property 2 (SCHEMA sec 7).  A pending cancel_requested is never cleared by

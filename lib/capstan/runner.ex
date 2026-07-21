@@ -357,8 +357,12 @@ defmodule Capstan.Runner do
   def sleep(%Ctx{config: config} = ctx, name, seconds)
       when is_integer(seconds) and seconds >= 0 do
     target =
-      step(ctx, "$sleep:#{name}", fn -> DateTime.add(Config.now(config), seconds, :second) end,
-        [])
+      step(
+        ctx,
+        "$sleep:#{name}",
+        fn -> DateTime.add(Config.now(config), seconds, :second) end,
+        []
+      )
 
     now = Config.now(config)
 
@@ -392,31 +396,36 @@ defmodule Capstan.Runner do
   end
 
   def spawn_many(%Ctx{job: parent, config: config} = ctx, name, buildables) do
-    step(ctx, "$spawn:#{name}", fn ->
-      keyed =
-        buildables
-        |> Enum.with_index()
-        |> Enum.map(fn {{Capstan.Worker, worker, input, opts}, index} ->
-          key = "$spawn:#{parent.id}:#{name}:#{index}"
+    step(
+      ctx,
+      "$spawn:#{name}",
+      fn ->
+        keyed =
+          buildables
+          |> Enum.with_index()
+          |> Enum.map(fn {{Capstan.Worker, worker, input, opts}, index} ->
+            key = "$spawn:#{parent.id}:#{name}:#{index}"
 
-          opts =
-            opts
-            |> Keyword.put(:parent_id, parent.id)
-            |> Keyword.put(:unique, key: key, scope: :always)
+            opts =
+              opts
+              |> Keyword.put(:parent_id, parent.id)
+              |> Keyword.put(:unique, key: key, scope: :always)
 
-          {key, {Capstan.Worker, worker, input, opts}}
+            {key, {Capstan.Worker, worker, input, opts}}
+          end)
+
+        _inserted = Capstan.insert_all(ctx.capstan, Enum.map(keyed, &elem(&1, 1)))
+
+        {storage, ref} = config.storage_ref
+
+        Enum.map(keyed, fn {key, _buildable} ->
+          {:ok, child} = storage.get_by_unique_key(ref, key)
+
+          child.id
         end)
-
-      _inserted = Capstan.insert_all(ctx.capstan, Enum.map(keyed, &elem(&1, 1)))
-
-      {storage, ref} = config.storage_ref
-
-      Enum.map(keyed, fn {key, _buildable} ->
-        {:ok, child} = storage.get_by_unique_key(ref, key)
-
-        child.id
-      end)
-    end, [])
+      end,
+      []
+    )
   end
 
   # Park (at zero cost) until every spawned child is terminal, then return
@@ -495,8 +504,13 @@ defmodule Capstan.Runner do
             estimate
           end
 
-        storage.debit_rate(ref, "resource:" <> resource, period, units - credit,
-          Config.now(config))
+        storage.debit_rate(
+          ref,
+          "resource:" <> resource,
+          period,
+          units - credit,
+          Config.now(config)
+        )
 
       _ ->
         raise ArgumentError,

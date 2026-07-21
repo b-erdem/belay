@@ -76,5 +76,4 @@ defmodule Capstan.ChunkTest do
     # deadline path — with slack for slow CI runners.
     assert System.monotonic_time(:millisecond) - started < 600
   end
-
 end

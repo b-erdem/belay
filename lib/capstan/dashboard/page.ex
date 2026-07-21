@@ -127,10 +127,30 @@ defmodule Capstan.Dashboard.Page do
   <div id="drawer"></div>
   <script>
   const qs = new URLSearchParams(location.search);
-  const TOKEN = qs.get('token');
-  const auth = p => TOKEN ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOKEN : p;
-  const j = async (p, opts) => { const r = await fetch(auth(p), opts); return r.json(); };
-  const post = (p, body) => j(p, {method:'POST', body: JSON.stringify(body || {})});
+  // Take the token from the URL once, keep it in sessionStorage (survives
+  // reloads within the tab), and strip it from the address bar so it does
+  // not leak via history or the Referer header.
+  const urlToken = qs.get('token');
+  if (urlToken) {
+    try { sessionStorage.setItem('capstan:token', urlToken); } catch (e) {}
+    qs.delete('token');
+    history.replaceState(null, '', location.pathname + (qs.size ? '?' + qs : '') + location.hash);
+  }
+  let stored = null;
+  try { stored = sessionStorage.getItem('capstan:token'); } catch (e) {}
+  const TOKEN = urlToken || stored;
+  const streamAuth = p => TOKEN ? p + (p.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN) : p;
+  const j = async (p, opts = {}) => {
+    const headers = {...(opts.headers || {})};
+    if (TOKEN) headers.authorization = 'Bearer ' + TOKEN;
+    const r = await fetch(p, {...opts, headers});
+    return r.json();
+  };
+  const post = (p, body) => j(p, {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify(body || {})
+  });
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   // For values interpolated into a JS string literal inside an inline
   // handler (onclick="f('HERE')"). esc alone leaves ' unescaped, which
@@ -363,7 +383,7 @@ defmodule Capstan.Dashboard.Page do
     // ?sse=0 renders a static snapshot — for screenshot/automation tooling
     // that waits on network idle (headless browsers hang on open streams).
     if (new URLSearchParams(location.search).get('sse') === '0') return;
-    const es = new EventSource(auth('/api/sse'));
+    const es = new EventSource(streamAuth('/api/sse'));
     es.onmessage = e => { renderOverview(JSON.parse(e.data)); document.getElementById('live').style.opacity = 1; };
     es.onerror = () => { document.getElementById('live').style.opacity = .3; };
   }

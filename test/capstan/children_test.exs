@@ -59,7 +59,8 @@ defmodule Capstan.ChildrenTest do
     assert counts[:failed] == 1
     assert {:ok, _results} = Capstan.await_result(name, parent.id, 100)
 
-    states = name |> Capstan.list_jobs(parent_id: parent.id) |> Enum.map(& &1.state) |> Enum.sort()
+    states =
+      name |> Capstan.list_jobs(parent_id: parent.id) |> Enum.map(& &1.state) |> Enum.sort()
 
     assert states == ["failed", "succeeded"]
   end
@@ -112,6 +113,8 @@ defmodule Capstan.ChildrenTest do
     callback = Enum.find(Batch.jobs(name, batch_id), &(&1.wf_name == "on-complete"))
 
     assert callback.state == "succeeded"
-    assert {:ok, %{"kind" => "batch-done", "batch_id" => ^batch_id}} = {:ok, Capstan.Job.result(callback)}
+
+    assert {:ok, %{"kind" => "batch-done", "batch_id" => ^batch_id}} =
+             {:ok, Capstan.Job.result(callback)}
   end
 end

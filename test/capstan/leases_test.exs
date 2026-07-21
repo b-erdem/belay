@@ -84,12 +84,20 @@ defmodule Capstan.LeasesTest do
     %{retried: [_]} = reclaim!(name)
 
     advance(clock, 6)
-    assert %{succeeded: 1} = Testing.drain(name, :default)
+    current_view = claim_one!(name)
+    assert current_view.attempt == 2
 
     {mod, ref} = storage(name)
     now = Capstan.Config.now(config(name))
 
     assert {:error, :stale} = mod.ack(ref, zombie_view, {:succeeded, nil}, now)
+
+    # The stale completion cannot settle or otherwise disturb the live
+    # replacement attempt.
+    assert %{state: "running", attempt: 2} = job!(name, current_view.id)
+
+    assert {:ok, %{job: %{state: "succeeded", attempt: 2}}} =
+             mod.ack(ref, current_view, {:succeeded, nil}, now)
   end
 
   test "lease exhaustion fails the job and cascades its workflow", %{

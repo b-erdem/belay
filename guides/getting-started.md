@@ -95,7 +95,7 @@ MyApp.WelcomeEmail.new(%{"user_id" => 42},
   priority: 1,              # 0 (highest) .. lower numbers first
   max_attempts: 3,
   unique: "welcome:42",     # at most one incomplete job with this key
-  budget: [usd: 0.50]       # fail the job if step costs cross the cap
+  budget: [usd: 0.50]       # fail after a step's declared cost crosses the limit
 )
 ```
 
@@ -134,4 +134,5 @@ exactly once cluster-wide.
 - [Building agents](agents.md) — budgets, human approval, fan-out, streaming
 - [Operations](operations.md) — leases, shutdown, retention, observability
 - [Testing](testing.md) — deterministic tests with `drain` and a SimClock
-- Add `{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}` for the built-in UI
+- Add `{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}` for a read-only
+  local UI, or configure `token:` / `authorizer:` to enable operator actions

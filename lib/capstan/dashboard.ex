@@ -20,9 +20,14 @@ defmodule Capstan.Dashboard do
     * `:bind` — default `{127, 0, 0, 1}`; bind `{0, 0, 0, 0}` only behind a
       proxy you trust
     * `:token` — when set, every request must carry it
-      (`Authorization: Bearer <token>` or `?token=`)
+      (`Authorization: Bearer <token>`; `?token=` is accepted only for GET
+      requests so browser `EventSource` can authenticate)
     * `:authorizer` — gates the mutating endpoints exactly like the MCP
       server's authorizer: `authorize(tool, args) -> :ok | {:error, msg}`
+
+  Mutations are disabled by default. Configure either `:token` or
+  `:authorizer` to enable them. Mutating requests must use JSON and, when an
+  `Origin` header is present, it must match the request's `Host` header.
 
   The server speaks plain HTTP/1.1 over `gen_tcp` with Erlang's built-in
   request parsing; live updates stream over SSE. It is an operator tool:
@@ -35,6 +40,10 @@ defmodule Capstan.Dashboard do
   require Logger
 
   alias Capstan.{Config, View}
+
+  @max_body_bytes 1_048_576
+  @max_header_bytes 65_536
+  @max_headers 100
 
   # -- Lifecycle ----------------------------------------------------------------
 
@@ -111,22 +120,66 @@ defmodule Capstan.Dashboard do
 
     with {:ok, {:http_request, method, {:abs_path, path}, _version}} <-
            :gen_tcp.recv(socket, 0, 10_000),
-         {:ok, headers} <- read_headers(socket, %{}) do
+         {:ok, headers} <- read_headers(socket, %{}, 0, 0) do
       {route, query} = split_path(to_string(path))
-      body = read_body(socket, headers)
 
-      respond(socket, state, method, route, query, headers, body)
+      case read_body(socket, headers) do
+        {:ok, body} ->
+          respond(socket, state, method, route, query, headers, body)
+
+        {:error, :too_large} ->
+          send_json(socket, 413, %{"error" => "request body too large"})
+
+        {:error, :bad_length} ->
+          send_json(socket, 400, %{"error" => "invalid content-length"})
+
+        {:error, :incomplete} ->
+          send_json(socket, 400, %{"error" => "incomplete request body"})
+
+        {:error, :unsupported_transfer} ->
+          send_json(socket, 400, %{"error" => "transfer-encoding is not supported"})
+      end
     else
-      _ -> :ok
+      {:error, :headers_too_large} ->
+        send_json(socket, 431, %{"error" => "request headers too large"})
+
+      {:error, :duplicate_content_length} ->
+        send_json(socket, 400, %{"error" => "duplicate content-length"})
+
+      _ ->
+        :ok
     end
   after
     :gen_tcp.close(socket)
   end
 
-  defp read_headers(socket, acc) do
+  defp read_headers(_socket, _acc, count, _bytes) when count >= @max_headers,
+    do: {:error, :headers_too_large}
+
+  defp read_headers(_socket, _acc, _count, bytes) when bytes >= @max_header_bytes,
+    do: {:error, :headers_too_large}
+
+  defp read_headers(socket, acc, count, bytes) do
     case :gen_tcp.recv(socket, 0, 5_000) do
       {:ok, {:http_header, _, name, _, value}} ->
-        read_headers(socket, Map.put(acc, String.downcase(to_string(name)), to_string(value)))
+        name = String.downcase(to_string(name))
+        value = to_string(value)
+
+        cond do
+          name == "content-length" and Map.has_key?(acc, name) ->
+            {:error, :duplicate_content_length}
+
+          bytes + byte_size(name) + byte_size(value) > @max_header_bytes ->
+            {:error, :headers_too_large}
+
+          true ->
+            read_headers(
+              socket,
+              Map.put(acc, name, value),
+              count + 1,
+              bytes + byte_size(name) + byte_size(value)
+            )
+        end
 
       {:ok, :http_eoh} ->
         {:ok, acc}
@@ -136,18 +189,26 @@ defmodule Capstan.Dashboard do
     end
   end
 
+  defp read_body(_socket, %{"transfer-encoding" => _}), do: {:error, :unsupported_transfer}
+
   defp read_body(socket, headers) do
     case Integer.parse(Map.get(headers, "content-length", "0")) do
-      {length, _} when length > 0 ->
+      {length, ""} when length > @max_body_bytes ->
+        {:error, :too_large}
+
+      {length, ""} when length > 0 ->
         :inet.setopts(socket, packet: :raw)
 
         case :gen_tcp.recv(socket, length, 5_000) do
-          {:ok, body} -> body
-          _ -> ""
+          {:ok, body} -> {:ok, body}
+          _ -> {:error, :incomplete}
         end
 
+      {0, ""} ->
+        {:ok, ""}
+
       _ ->
-        ""
+        {:error, :bad_length}
     end
   end
 
@@ -160,10 +221,19 @@ defmodule Capstan.Dashboard do
 
   defp respond(socket, state, method, route, query, headers, body) do
     cond do
-      not authorized_request?(state, query, headers) ->
+      not authorized_request?(state, method, query, headers) ->
         send_json(socket, 401, %{"error" => "unauthorized"})
 
-      route == "/api/sse" ->
+      method == :POST and not json_request?(headers) ->
+        send_json(socket, 415, %{"error" => "content-type must be application/json"})
+
+      method == :POST and not same_origin?(headers) ->
+        send_json(socket, 403, %{"error" => "cross-origin mutation denied"})
+
+      method == :POST and not json_object?(body) ->
+        send_json(socket, 400, %{"error" => "request body must be a JSON object"})
+
+      method == :GET and route == "/api/sse" ->
         sse_loop(socket, state)
 
       true ->
@@ -181,22 +251,62 @@ defmodule Capstan.Dashboard do
       send_json(socket, 500, %{"error" => Exception.message(error)})
   end
 
-  defp authorized_request?(%{token: nil}, _query, _headers), do: true
+  defp authorized_request?(%{token: nil}, _method, _query, _headers), do: true
 
-  defp authorized_request?(%{token: token}, query, headers) do
-    presented = query["token"] || strip_bearer(Map.get(headers, "authorization"))
+  defp authorized_request?(%{token: token}, method, query, headers) do
+    presented = strip_bearer(Map.get(headers, "authorization")) || get_query_token(method, query)
     is_binary(presented) and secure_equal?(presented, token)
   end
+
+  defp get_query_token(:GET, query), do: query["token"]
+  defp get_query_token(_method, _query), do: nil
 
   defp strip_bearer("Bearer " <> rest), do: rest
   defp strip_bearer(_), do: nil
 
-  # Constant-time comparison via fixed-length digests: hashing equalizes
-  # length (hiding the token length) and makes the residual per-byte timing
-  # of `==` reveal only digest bytes, which are preimage-resistant.
-  defp secure_equal?(a, b) do
-    :crypto.hash(:sha256, a) == :crypto.hash(:sha256, b)
+  # Hashing hides token length; hash_equals/2 compares the fixed-size digests
+  # in constant time.
+  defp secure_equal?(a, b) when is_binary(a) and is_binary(b) do
+    :crypto.hash_equals(:crypto.hash(:sha256, a), :crypto.hash(:sha256, b))
   end
+
+  defp secure_equal?(_a, _b), do: false
+
+  defp json_request?(headers) do
+    headers
+    |> Map.get("content-type", "")
+    |> String.downcase()
+    |> String.split(";", parts: 2)
+    |> hd()
+    |> String.trim()
+    |> Kernel.==("application/json")
+  end
+
+  defp json_object?(body) do
+    case Jason.decode(body) do
+      {:ok, value} when is_map(value) -> true
+      _ -> false
+    end
+  end
+
+  defp same_origin?(headers) do
+    case Map.get(headers, "origin") do
+      nil -> true
+      "null" -> false
+      origin -> same_authority?(URI.parse(origin), Map.get(headers, "host"))
+    end
+  end
+
+  defp same_authority?(%URI{scheme: scheme, host: host, port: port}, request_host)
+       when scheme in ["http", "https"] and is_binary(host) and is_binary(request_host) do
+    origin_port = port || if(scheme == "https", do: 443, else: 80)
+    request = URI.parse("#{scheme}://#{request_host}")
+    request_port = request.port || if(scheme == "https", do: 443, else: 80)
+
+    String.downcase(host) == String.downcase(request.host || "") and origin_port == request_port
+  end
+
+  defp same_authority?(_origin, _request_host), do: false
 
   # -- Routes -------------------------------------------------------------------
 
@@ -241,7 +351,8 @@ defmodule Capstan.Dashboard do
           {String.to_existing_atom(key), value}
       end)
 
-    {200, %{"jobs" => state.capstan |> Capstan.list_jobs(filters) |> Enum.map(&View.job_summary/1)}}
+    {200,
+     %{"jobs" => state.capstan |> Capstan.list_jobs(filters) |> Enum.map(&View.job_summary/1)}}
   end
 
   defp handle(:GET, "/api/jobs/" <> id, _query, _body, state) do
@@ -325,7 +436,12 @@ defmodule Capstan.Dashboard do
     end
   end
 
-  defp authorize_mutation(%{authorizer: nil}, _tool, _args), do: :ok
+  defp authorize_mutation(%{authorizer: nil, token: nil}, _tool, _args) do
+    {403, %{"error" => "dashboard mutations are disabled; configure :token or :authorizer"}}
+  end
+
+  defp authorize_mutation(%{authorizer: nil, token: token}, _tool, _args) when is_binary(token),
+    do: :ok
 
   defp authorize_mutation(%{authorizer: authorizer}, tool, args) do
     case run_authorizer(authorizer, tool, args) do
@@ -426,9 +542,13 @@ defmodule Capstan.Dashboard do
   end
 
   defp reason(200), do: "OK"
+  defp reason(400), do: "Bad Request"
   defp reason(401), do: "Unauthorized"
   defp reason(403), do: "Forbidden"
   defp reason(404), do: "Not Found"
   defp reason(409), do: "Conflict"
+  defp reason(413), do: "Content Too Large"
+  defp reason(415), do: "Unsupported Media Type"
+  defp reason(431), do: "Request Header Fields Too Large"
   defp reason(_), do: "Error"
 end

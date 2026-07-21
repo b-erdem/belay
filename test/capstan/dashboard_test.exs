@@ -25,7 +25,7 @@ defmodule Capstan.DashboardTest do
 
   # Raw HTTP client over gen_tcp — the dashboard speaks plain HTTP/1.1 and
   # closes per request, so reading to socket close is the whole protocol.
-  defp request!(method, url, body \\ "") do
+  defp request!(method, url, body \\ "", headers \\ []) do
     %{port: port, path: path, query: query} = URI.parse(url)
     target = path <> if(query, do: "?" <> query, else: "")
 
@@ -34,7 +34,8 @@ defmodule Capstan.DashboardTest do
     :ok =
       :gen_tcp.send(socket, [
         "#{method} #{target} HTTP/1.1\r\nhost: localhost\r\n",
-        "content-type: application/json\r\ncontent-length: #{byte_size(body)}\r\n\r\n",
+        Enum.map(headers, fn {name, value} -> "#{name}: #{value}\r\n" end),
+        "content-length: #{byte_size(body)}\r\n\r\n",
         body
       ])
 
@@ -57,7 +58,11 @@ defmodule Capstan.DashboardTest do
   defp get!(url), do: request!("GET", url)
 
   defp post!(url, payload) do
-    {status, body} = request!("POST", url, Jason.encode!(payload))
+    {status, body} =
+      request!("POST", url, Jason.encode!(payload), [
+        {"content-type", "application/json"},
+        {"authorization", "Bearer s3cret"}
+      ])
 
     {status, Jason.decode!(body)}
   end
@@ -112,14 +117,14 @@ defmodule Capstan.DashboardTest do
 
     Testing.drain(name, :default)
 
-    {200, retried} = post!(base <> "/api/jobs/#{failed.id}/retry?token=s3cret", %{})
+    {200, retried} = post!(base <> "/api/jobs/#{failed.id}/retry", %{})
     assert retried["state"] == "ready"
 
-    {403, denied} = post!(base <> "/api/jobs/#{failed.id}/cancel?token=s3cret", %{})
+    {403, denied} = post!(base <> "/api/jobs/#{failed.id}/cancel", %{})
     assert denied["error"] =~ "no cancels today"
 
     {200, _} =
-      post!(base <> "/api/signals?token=s3cret", %{
+      post!(base <> "/api/signals", %{
         "scope" => "custom",
         "name" => "ping",
         "payload" => %{"n" => 1}
@@ -157,6 +162,106 @@ defmodule Capstan.DashboardTest do
 
   test "SSE stream rejects bad tokens", %{base: base} do
     assert {401, _} = get!(base <> "/api/sse?token=wrong")
+  end
+
+  test "query tokens cannot authorize mutations", %{base: base} do
+    {status, _body} =
+      request!("POST", base <> "/api/signals?token=s3cret", ~s({}), [
+        {"content-type", "application/json"}
+      ])
+
+    assert status == 401
+  end
+
+  test "mutations require JSON and reject cross-origin requests", %{base: base} do
+    auth = [{"authorization", "Bearer s3cret"}]
+    assert {415, _} = request!("POST", base <> "/api/signals", "scope=x", auth)
+
+    assert {415, _} =
+             request!("POST", base <> "/api/signals", ~s({}), [
+               {"authorization", "Bearer s3cret"},
+               {"content-type", "application/jsonp"}
+             ])
+
+    assert {400, _} =
+             request!("POST", base <> "/api/signals", "{", [
+               {"authorization", "Bearer s3cret"},
+               {"content-type", "application/json"}
+             ])
+
+    assert {400, _} =
+             request!("POST", base <> "/api/signals", ~s([]), [
+               {"authorization", "Bearer s3cret"},
+               {"content-type", "application/json"}
+             ])
+
+    assert {403, _} =
+             request!("POST", base <> "/api/signals", ~s({}), [
+               {"authorization", "Bearer s3cret"},
+               {"content-type", "application/json"},
+               {"origin", "https://evil.example"}
+             ])
+  end
+
+  test "rejects unsupported or ambiguous request framing", %{base: base} do
+    %{port: port} = URI.parse(base)
+
+    {:ok, chunked} = :gen_tcp.connect(~c"localhost", port, [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(
+        chunked,
+        "POST /api/signals HTTP/1.1\r\nhost: localhost\r\n" <>
+          "content-type: application/json\r\nauthorization: Bearer s3cret\r\n" <>
+          "transfer-encoding: chunked\r\n\r\n0\r\n\r\n"
+      )
+
+    chunked_response = read_all(chunked, [])
+    :gen_tcp.close(chunked)
+    assert chunked_response =~ "HTTP/1.1 400"
+
+    {:ok, duplicate} = :gen_tcp.connect(~c"localhost", port, [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(
+        duplicate,
+        "POST /api/signals HTTP/1.1\r\nhost: localhost\r\n" <>
+          "content-type: application/json\r\nauthorization: Bearer s3cret\r\n" <>
+          "content-length: 2\r\ncontent-length: 2\r\n\r\n{}"
+      )
+
+    duplicate_response = read_all(duplicate, [])
+    :gen_tcp.close(duplicate)
+    assert duplicate_response =~ "HTTP/1.1 400"
+  end
+
+  test "tokenless dashboards are read-only by default", %{name: name} do
+    {:ok, read_only} = Capstan.Dashboard.start_link(capstan: name, port: 0)
+    read_only_base = "http://localhost:#{Capstan.Dashboard.port(read_only)}"
+
+    assert {200, _} = get!(read_only_base <> "/api/overview")
+
+    {403, body} =
+      request!("POST", read_only_base <> "/api/signals", ~s({"scope":"x","name":"y"}), [
+        {"content-type", "application/json"}
+      ])
+
+    assert Jason.decode!(body)["error"] =~ "mutations are disabled"
+  end
+
+  test "rejects bodies over one MiB before reading them", %{base: base} do
+    %{port: port} = URI.parse(base)
+    {:ok, socket} = :gen_tcp.connect(~c"localhost", port, [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(
+        socket,
+        "POST /api/signals HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n" <>
+          "authorization: Bearer s3cret\r\ncontent-length: 1048577\r\n\r\n"
+      )
+
+    response = read_all(socket, [])
+    assert response =~ "HTTP/1.1 413"
   end
 
   # Read until one complete SSE frame has arrived (the stream never closes

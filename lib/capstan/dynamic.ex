@@ -78,20 +78,34 @@ defmodule Capstan.Queues do
   @doc false
   def encode_opts(opts) do
     Map.new(opts, fn
-      {:rate, rate} when is_list(rate) -> {"rate", Map.new(rate, fn {k, v} -> {to_string(k), v} end)}
-      {:limit, bounds} when is_list(bounds) -> {"limit", Map.new(bounds, fn {k, v} -> {to_string(k), v} end)}
-      {:partition, {source, key}} -> {"partition", [to_string(source), key]}
-      {key, value} -> {to_string(key), value}
+      {:rate, rate} when is_list(rate) ->
+        {"rate", Map.new(rate, fn {k, v} -> {to_string(k), v} end)}
+
+      {:limit, bounds} when is_list(bounds) ->
+        {"limit", Map.new(bounds, fn {k, v} -> {to_string(k), v} end)}
+
+      {:partition, {source, key}} ->
+        {"partition", [to_string(source), key]}
+
+      {key, value} ->
+        {to_string(key), value}
     end)
   end
 
   @doc false
   def decode_opts(stored) do
     Enum.map(stored, fn
-      {"rate", rate} -> {:rate, Enum.map(rate, fn {k, v} -> {String.to_existing_atom(k), v} end)}
-      {"limit", %{} = bounds} -> {:limit, Enum.map(bounds, fn {k, v} -> {String.to_existing_atom(k), v} end)}
-      {"partition", [source, key]} -> {:partition, {String.to_existing_atom(source), key}}
-      {key, value} -> {String.to_existing_atom(key), value}
+      {"rate", rate} ->
+        {:rate, Enum.map(rate, fn {k, v} -> {String.to_existing_atom(k), v} end)}
+
+      {"limit", %{} = bounds} ->
+        {:limit, Enum.map(bounds, fn {k, v} -> {String.to_existing_atom(k), v} end)}
+
+      {"partition", [source, key]} ->
+        {:partition, {String.to_existing_atom(source), key}}
+
+      {key, value} ->
+        {String.to_existing_atom(key), value}
     end)
   end
 end
@@ -281,8 +295,12 @@ defmodule Capstan.QueueSync do
 
           _ ->
             case DynamicSupervisor.start_child(sup, {Capstan.Producer, {config, queue, spec}}) do
-              {:ok, pid} -> Map.put(running, queue, {pid, spec})
-              {:error, {:already_started, pid}} -> Map.put(running, queue, {pid, spec})
+              {:ok, pid} ->
+                Map.put(running, queue, {pid, spec})
+
+              {:error, {:already_started, pid}} ->
+                Map.put(running, queue, {pid, spec})
+
               {:error, reason} ->
                 Logger.warning("[capstan] producer #{queue} failed to start: #{inspect(reason)}")
 

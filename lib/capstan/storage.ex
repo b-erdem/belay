@@ -35,22 +35,40 @@ defmodule Capstan.Storage do
 
   @callback child_spec({Capstan.Config.t(), keyword()}) :: Supervisor.child_spec()
   @callback insert_jobs(ref, [map()], now) :: {:ok, [Job.t()]}
-  @callback claim(ref, queue_spec, demand :: pos_integer(), node_id :: String.t(),
-              lease_ttl_ms :: pos_integer(), now) :: {:ok, [Job.t()]}
+  @callback claim(
+              ref,
+              queue_spec,
+              demand :: pos_integer(),
+              node_id :: String.t(),
+              lease_ttl_ms :: pos_integer(),
+              now
+            ) :: {:ok, [Job.t()]}
   @callback renew_leases(ref, [integer()], String.t(), now) :: {:ok, [integer()]}
   @callback reclaim_expired(ref, now, (Job.t() -> now())) ::
               {:ok, %{retried: [integer()], failed: [integer()]}}
   @callback ack(ref, Job.t(), outcome, now) :: {:ok, settle_result} | {:error, :stale}
   @callback get_job(ref, integer()) :: {:ok, Job.t()} | :error
   @callback get_step(ref, integer(), String.t()) :: {:ok, binary()} | :none
-  @callback put_step(ref, integer(), String.t(), binary(), %{usd_micros: integer(), tokens: integer()}, now) ::
+  @callback put_step(
+              ref,
+              integer(),
+              String.t(),
+              binary(),
+              %{usd_micros: integer(), tokens: integer()},
+              now
+            ) ::
               {:ok, %{spent_usd_micros: integer(), spent_tokens: integer()}}
   @callback list_steps(ref, integer()) :: {:ok, [map()]}
   @callback get_signal(ref, [String.t()], String.t()) :: {:ok, map()} | :none
   @callback put_signal(ref, String.t(), String.t(), map(), now) :: {:ok, woken :: [Job.t()]}
   @callback clear_signal(ref, String.t(), String.t()) :: :ok
   @callback request_cancel(ref, integer(), now) ::
-              {:ok, %{status: :cancelled | :requested | :noop, cancelled: [Job.t()], released: [Job.t()]}}
+              {:ok,
+               %{
+                 status: :cancelled | :requested | :noop,
+                 cancelled: [Job.t()],
+                 released: [Job.t()]
+               }}
   @callback workflow_jobs(ref, String.t()) :: {:ok, [Job.t()]}
   @callback get_by_unique_key(ref, String.t()) :: {:ok, Job.t()} | :error
   @callback children(ref, integer()) :: {:ok, [Job.t()]}
@@ -69,7 +87,13 @@ defmodule Capstan.Storage do
                ]}
   @callback list_jobs(ref, map()) :: {:ok, [Job.t()]}
   @callback retry(ref, integer(), now) :: {:ok, Job.t()} | {:error, :not_retryable | :not_found}
-  @callback prune_jobs(ref, state :: String.t(), now, keep_seconds :: integer(), limit :: pos_integer()) ::
+  @callback prune_jobs(
+              ref,
+              state :: String.t(),
+              now,
+              keep_seconds :: integer(),
+              limit :: pos_integer()
+            ) ::
               {:ok, non_neg_integer()}
   @callback resettle_parents(ref, now) :: {:ok, [Job.t()]}
   @callback put_dynamic_queue(ref, String.t(), map(), now) :: :ok
@@ -80,7 +104,13 @@ defmodule Capstan.Storage do
   @callback set_cron_paused(ref, String.t(), boolean()) :: :ok
   @callback list_dynamic_crons(ref) :: {:ok, [map()]}
   @callback prune_signals(ref, now, ttl_seconds :: integer()) :: :ok
-  @callback debit_rate(ref, bucket :: String.t(), period :: pos_integer(), amount :: integer(), now) :: :ok
+  @callback debit_rate(
+              ref,
+              bucket :: String.t(),
+              period :: pos_integer(),
+              amount :: integer(),
+              now
+            ) :: :ok
   @callback prune_rate(ref, before_unix :: integer()) :: :ok
 end
 

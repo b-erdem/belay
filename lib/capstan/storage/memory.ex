@@ -101,7 +101,8 @@ defmodule Capstan.Storage.Memory do
   def children(ref, parent_id), do: call(ref, {:children, parent_id})
 
   @impl Capstan.Storage
-  def append_event(ref, job_id, payload, now), do: call(ref, {:append_event, job_id, payload, now})
+  def append_event(ref, job_id, payload, now),
+    do: call(ref, {:append_event, job_id, payload, now})
 
   @impl Capstan.Storage
   def list_events(ref, job_id, after_seq), do: call(ref, {:list_events, job_id, after_seq})
@@ -116,7 +117,8 @@ defmodule Capstan.Storage.Memory do
   def retry(ref, id, now), do: call(ref, {:retry, id, now})
 
   @impl Capstan.Storage
-  def prune_jobs(ref, state, now, keep, limit), do: call(ref, {:prune_jobs, state, now, keep, limit})
+  def prune_jobs(ref, state, now, keep, limit),
+    do: call(ref, {:prune_jobs, state, now, keep, limit})
 
   @impl Capstan.Storage
   def resettle_parents(ref, now), do: call(ref, {:resettle_parents, now})
@@ -715,7 +717,9 @@ defmodule Capstan.Storage.Memory do
   end
 
   defp duplicate_cron?(_state, %{cron_name: nil}), do: false
-  defp duplicate_cron?(state, row), do: MapSet.member?(state.cron_slots, {row.cron_name, row.cron_slot})
+
+  defp duplicate_cron?(state, row),
+    do: MapSet.member?(state.cron_slots, {row.cron_name, row.cron_slot})
 
   defp duplicate_unique?(_state, %{unique_key: nil}), do: false
 
@@ -728,13 +732,26 @@ defmodule Capstan.Storage.Memory do
 
   defp matches_filters?(job, filters) do
     Enum.all?(filters, fn
-      {:queue, queue} -> job.queue == to_string(queue)
-      {:state, state} -> job.state == to_string(state)
-      {:worker, worker} -> job.kind == worker |> to_string() |> String.replace_prefix("Elixir.", "")
-      {:workflow_id, id} -> job.workflow_id == id
-      {:parent_id, id} -> job.parent_id == id
-      {:before_id, id} -> job.id < id
-      {:limit, _} -> true
+      {:queue, queue} ->
+        job.queue == to_string(queue)
+
+      {:state, state} ->
+        job.state == to_string(state)
+
+      {:worker, worker} ->
+        job.kind == worker |> to_string() |> String.replace_prefix("Elixir.", "")
+
+      {:workflow_id, id} ->
+        job.workflow_id == id
+
+      {:parent_id, id} ->
+        job.parent_id == id
+
+      {:before_id, id} ->
+        job.id < id
+
+      {:limit, _} ->
+        true
     end)
   end
 

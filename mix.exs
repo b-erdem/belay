@@ -14,9 +14,8 @@ defmodule Capstan.MixProject do
       deps: deps(),
       name: "Capstan",
       description:
-        "A durable job engine for Elixir on Postgres: jobs built from memoized " <>
-          "steps with cost budgets, signals, workflows, event streams, replay " <>
-          "debugging, and token-aware rate limits — leaderless, no Ecto required.",
+        "Durable execution for Elixir on Postgres: step-resumable jobs, workflows, " <>
+          "budgets, signals, and replay — without a separate workflow server.",
       package: package(),
       docs: docs()
     ]
@@ -66,7 +65,11 @@ defmodule Capstan.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib guides mix.exs README.md DESIGN.md SCHEMA.md CHANGELOG.md LICENSE)
+      # The formal-verification harness (verify/) lives in the repo, not the
+      # published package — it is evidence, not runtime code, and shipping a
+      # nested mix project inside a library tarball confuses tooling.
+      files: ~w(lib guides assets mix.exs README.md DESIGN.md SCHEMA.md CHANGELOG.md
+           CONTRIBUTING.md SECURITY.md LICENSE)
     ]
   end
 end

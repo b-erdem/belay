@@ -49,5 +49,4 @@ defmodule Capstan.AdaptiveLimitTest do
     # Idle polls decay back toward the floor.
     assert_receive {:scaled, from, to} when to < from, 3_000
   end
-
 end

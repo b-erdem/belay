@@ -50,7 +50,14 @@ if Application.get_env(:capstan, :test_storage) == :postgres do
     # -- Command generation (deterministic under the seed) ----------------------
 
     defp random_spec(seed) do
-      base = %{queue: "eq", local_limit: 10, global_limit: nil, rate: nil, partition: nil, manual: true}
+      base = %{
+        queue: "eq",
+        local_limit: 10,
+        global_limit: nil,
+        rate: nil,
+        partition: nil,
+        manual: true
+      }
 
       case rem(seed, 4) do
         0 -> base
@@ -157,7 +164,10 @@ if Application.get_env(:capstan, :test_storage) == :postgres do
           assert Enum.uniq(id_lists) |> length() == 1,
                  "claims diverged: #{inspect(id_lists)}"
 
-          %{state | running: Enum.map(hd(id_lists), fn {id, att} -> {id, att} end) ++ state.running}
+          %{
+            state
+            | running: Enum.map(hd(id_lists), fn {id, att} -> {id, att} end) ++ state.running
+          }
 
         {:ack, claimed, _} ->
           %{state | running: List.delete(state.running, claimed)}
@@ -257,6 +267,7 @@ if Application.get_env(:capstan, :test_storage) == :postgres do
 
     defp apply_command(side, {:reclaim}) do
       backoff = fn _job -> DateTime.add(now(side), 7, :second) end
+
       {:ok, %{retried: retried, failed: failed}} =
         side.mod.reclaim_expired(side.ref, now(side), backoff)
 
@@ -312,7 +323,14 @@ if Application.get_env(:capstan, :test_storage) == :postgres do
 
       Capstan.Storage.Postgres.truncate!(pid)
 
-      %{mod: Capstan.Storage.Postgres, ref: pid, clock: clock, spec: spec, pid: pid, kind: :postgres}
+      %{
+        mod: Capstan.Storage.Postgres,
+        ref: pid,
+        clock: clock,
+        spec: spec,
+        pid: pid,
+        kind: :postgres
+      }
     end
 
     defp stop_side(side) do

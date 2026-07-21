@@ -36,7 +36,6 @@ defmodule Capstan.Producer do
 
   @impl GenServer
   def init({config, queue, spec}) do
-
     :pg.join(Capstan.pg_scope(config.name), {:producers, queue}, self())
 
     state = %{
@@ -63,6 +62,13 @@ defmodule Capstan.Producer do
   def handle_continue(:claim, state), do: {:noreply, claim(state)}
 
   @impl GenServer
+  def handle_call(:capstan_pause, _from, state), do: {:reply, :ok, %{state | paused: true}}
+
+  def handle_call(:capstan_resume, _from, state) do
+    {:reply, :ok, claim(%{state | paused: false})}
+  end
+
+  @impl GenServer
   def handle_info(:poll, state) do
     {:noreply, state |> claim() |> schedule_poll()}
   end
@@ -73,10 +79,6 @@ defmodule Capstan.Producer do
 
     {:noreply, claim(%{state | interval: state.config.busy_poll})}
   end
-
-  def handle_info(:capstan_pause, state), do: {:noreply, %{state | paused: true}}
-
-  def handle_info(:capstan_resume, state), do: {:noreply, claim(%{state | paused: false})}
 
   # A job task finished; free the slot and immediately look for more work.
   def handle_info({ref, _result}, state) when is_reference(ref) do

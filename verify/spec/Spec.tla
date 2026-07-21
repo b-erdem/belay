@@ -5,13 +5,14 @@
 (* (lib/capstan/storage/memory.ex + lib/capstan/storage.ex Logic) and the   *)
 (* runner (lib/capstan/runner.ex), grounded in verify/traces.exs.           *)
 (*                                                                          *)
-(* The point of the model is the four durable safety mechanisms Capstan     *)
+(* The point of the model is the durable safety mechanisms Capstan          *)
 (* relies on, all of which must survive a kill -9 (crash) + lease-expiry     *)
 (* reclaim:                                                                  *)
 (*                                                                          *)
-(*   * Step journaling is at-most-once per (job, name) and memoized on       *)
-(*     replay (runner.ex step/4 lines 170-206; PK (job_id,name) with        *)
-(*     ON CONFLICT DO NOTHING).                                             *)
+(*   * Once a step result is journaled, replay does not execute that step    *)
+(*     name again (runner.ex step/4 lines 170-206). Exec + journal is one    *)
+(*     atomic model action; a crash after an external effect but before the  *)
+(*     journal commit is deliberately outside this property.                 *)
 (*   * The BUDGET PRE-FLIGHT check: a step body must NOT run when the        *)
 (*     durable spend already exceeds the cap (runner.ex:188 check_budget!    *)
 (*     BEFORE fun.()).  This is the fix the 7h endurance soak forced         *)
@@ -42,7 +43,7 @@
 (*   * Per-step money is scaled to small integers (0.2 USD -> 2, 0.5 cap ->  *)
 (*     5) preserving the crossing arithmetic.                               *)
 (*   * Signals, awaiting/paused states, dynamic children, rate limiting and  *)
-(*     encryption are out of scope for these four properties.               *)
+(*     encryption are out of scope for these properties.                    *)
 (*   * A specific 5-job fixture stands in for the trace workers: a budget   *)
 (*     job, an always-raising job, its held dependent, a 2-step job for     *)
 (*     happy/retry/cancel behaviours, and a second-level dependent so the   *)
@@ -321,6 +322,69 @@ Next ==
 Spec == Init /\ [][Next]_vars
 
 --------------------------------------------------------------------------
+(* --- Mechanical execution-trace conformance ---------------------------- *)
+
+\* Attest calls TraceMatch(e) from a generated replay harness. Payload
+\* fields bind the observed job snapshots to this abstraction rather than
+\* checking only an event-name sequence.
+TraceJob(e) ==
+  CASE e.scenario \in {"budget_exact", "budget_crash_window"} -> 1
+    [] e.scenario = "workflow_settle" /\ e.job = 1 -> 2
+    [] e.scenario = "workflow_settle" /\ e.job = 2 -> 3
+    [] OTHER -> 4
+
+TraceDrainJob(e) ==
+  CASE e.scenario \in {"budget_exact", "budget_crash_window"} -> 1
+    [] e.scenario = "workflow_settle" -> 2
+    [] OTHER -> 4
+
+SeqToSet(seq) == {seq[i] : i \in 1..Len(seq)}
+
+TraceSnapshot(e, j) ==
+  /\ state[j] = e.state
+  /\ attempt[j] = e.attempt
+  /\ cancelReq[j] = e.cancel_requested
+  /\ spent[j] * 100000 = e.spent_usd_micros
+  /\ journaled[j] = SeqToSet(e.steps)
+
+TraceSnapshotAfter(e, j) ==
+  /\ state'[j] = e.state
+  /\ attempt'[j] = e.attempt
+  /\ cancelReq'[j] = e.cancel_requested
+  /\ spent'[j] * 100000 = e.spent_usd_micros
+  /\ journaled'[j] = SeqToSet(e.steps)
+
+TraceState(e) ==
+  LET j == TraceJob(e) IN
+    CASE e.state \in {"ready", "running", "held"} /\ TraceSnapshot(e, j) ->
+           UNCHANGED vars
+      [] e.state = "ready" -> /\ Raise(j) /\ TraceSnapshotAfter(e, j)
+      [] e.state = "succeeded" -> /\ Succeed(j) /\ TraceSnapshotAfter(e, j)
+      [] e.state = "failed" /\ j = 1 -> /\ FailBudget(j) /\ TraceSnapshotAfter(e, j)
+      [] e.state = "failed" -> /\ Raise(j) /\ TraceSnapshotAfter(e, j)
+      [] e.state = "cancelled" /\ e.scenario = "workflow_settle" ->
+           /\ Settle(j) /\ TraceSnapshotAfter(e, j)
+      [] e.state = "cancelled" -> /\ HonorCancel(j) /\ TraceSnapshotAfter(e, j)
+      [] OTHER -> FALSE
+
+TraceMatch(e) ==
+  CASE e.event = "scenario_init" -> UNCHANGED vars
+    [] e.event = "exec" ->
+         LET j == TraceJob(e) IN
+           /\ NextIdx(j) # 0
+           /\ Program[j][NextIdx(j)] = e.step
+           /\ Exec(j)
+    [] e.event = "state" -> TraceState(e)
+    [] e.event = "action" /\ e.kind = "insert" -> Insert(TraceJob(e))
+    [] e.event = "action" /\ e.kind = "claim" -> Claim(TraceJob(e))
+    [] e.event = "action" /\ e.kind = "drain" -> Drain(TraceDrainJob(e))
+    [] e.event = "action" /\ e.kind = "crash" -> Crash(TraceJob(e))
+    [] e.event = "action" /\ e.kind = "reclaim" -> Reclaim(TraceJob(e))
+    [] e.event = "action" /\ e.kind = "cancel" -> CancelRunning(TraceJob(e))
+    [] e.event = "action" /\ e.kind = "advance" -> Advance
+    [] OTHER -> FALSE
+
+--------------------------------------------------------------------------
 (* --- Properties --------------------------------------------------------- *)
 
 TypeOK ==
@@ -342,9 +406,9 @@ TypeOK ==
 NoExecutionPastBudget ==
   \A j \in Jobs : spent[j] <= Budget[j] + MaxCost[j]
 
-\* Property 3 (INVARIANT #3).  Every step body executes at most once per
-\* (job, name); memoized replay must not re-run a journaled step.
-StepsJournaledAtMostOnce ==
+\* Property 3 (INVARIANT #3). Within this model's atomic Exec+journal
+\* abstraction, memoized replay cannot run a step after it is journaled.
+JournaledStepsNotReexecuted ==
   \A j \in Jobs : \A n \in StepNames : execCount[j][n] <= 1
 
 \* Property 2 (SCHEMA sec 7).  A pending cancel_requested is never cleared by

@@ -8,3 +8,5 @@
 - [ ] No wall-clock reads in engine code (`now` is always a parameter)
 - [ ] Docs/guides updated where behavior changed
 - [ ] Wire contract touched? `SCHEMA.md` updated in the same PR
+- [ ] Durable semantics touched? TLA+ model/trace mapping updated; canonical
+      smoke passes and the corresponding mutant still fails

@@ -26,8 +26,14 @@ defmodule Capstan.Testing do
     {storage, ref} = config.storage_ref
 
     {:ok, jobs} =
-      storage.claim(ref, spec, spec.local_limit, config.node_id, config.lease_ttl,
-        Config.now(config))
+      storage.claim(
+        ref,
+        spec,
+        spec.local_limit,
+        config.node_id,
+        config.lease_ttl,
+        Config.now(config)
+      )
 
     case jobs do
       [] ->
