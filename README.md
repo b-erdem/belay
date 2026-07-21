@@ -209,6 +209,7 @@ by the same soak harness, sharing one database with Elixir workers.
 ## Docs
 
 [Getting started](guides/getting-started.md) ·
+[Migrating from Oban](guides/migrating-from-oban.md) ·
 [Durable steps](guides/durable-steps.md) ·
 [Building agents](guides/agents.md) ·
 [Operations](guides/operations.md) ·

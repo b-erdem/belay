@@ -29,6 +29,7 @@ defmodule Capstan.MixProject do
       extras: [
         "README.md",
         "guides/getting-started.md",
+        "guides/migrating-from-oban.md",
         "guides/durable-steps.md",
         "guides/agents.md",
         "guides/operations.md",

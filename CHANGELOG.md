@@ -41,6 +41,13 @@
   scaling stays a recipe: drive runtime `Queues.put/3` (also over MCP, so an
   agent can do it).
 
+- **`mix capstan.migrate_oban`** — move an Oban installation's pending
+  work in one command: dry-run analyzer (state census, per-worker port
+  verification, `executing`-row warnings), faithful conversion
+  (schedules, retry counts, errors, priority), `--map` renames, and
+  idempotent re-runs via `meta.migrated_from_oban_id`. History stays put
+  by design — the guide documents the archive pattern instead.
+
 ### Fixed
 - **Operator retry now clears a pending cancel and respects workflow
   dependencies.** Found by extending the TLA+ model with a `Retry` action:
