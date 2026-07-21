@@ -1,0 +1,6 @@
+{"seq":1,"scenario":"cancel_mid_run","event":"scenario_init"}
+{"seq":2,"kind":"insert","scenario":"cancel_mid_run","event":"action","job":1}
+{"seq":3,"kind":"drain","scenario":"cancel_mid_run","event":"action"}
+{"seq":4,"step":"s1","scenario":"cancel_mid_run","event":"exec","job":1}
+{"status":"requested","seq":5,"kind":"cancel","scenario":"cancel_mid_run","event":"action","job":1}
+{"state":"cancelled","seq":6,"scenario":"cancel_mid_run","event":"state","job":1,"attempt":1,"steps":["s1"],"cancel_requested":true,"spent_usd_micros":0,"budget_usd_micros":null}

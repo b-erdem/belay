@@ -1,0 +1,7 @@
+{"seq":1,"scenario":"budget_exact","event":"scenario_init"}
+{"seq":2,"kind":"insert","scenario":"budget_exact","event":"action","job":1,"budget_usd_micros":500000}
+{"seq":3,"kind":"drain","scenario":"budget_exact","event":"action"}
+{"seq":4,"step":"b1","scenario":"budget_exact","event":"exec","job":1}
+{"seq":5,"step":"b2","scenario":"budget_exact","event":"exec","job":1}
+{"seq":6,"step":"b3","scenario":"budget_exact","event":"exec","job":1}
+{"state":"failed","seq":7,"scenario":"budget_exact","event":"state","job":1,"attempt":1,"steps":["b1","b2","b3"],"cancel_requested":false,"spent_usd_micros":600000,"budget_usd_micros":500000}

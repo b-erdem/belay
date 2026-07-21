@@ -1,0 +1,7 @@
+{"seq":1,"scenario":"happy","event":"scenario_init"}
+{"seq":2,"kind":"insert","scenario":"happy","event":"action","job":1}
+{"state":"ready","seq":3,"scenario":"happy","event":"state","job":1,"attempt":0,"steps":[],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}
+{"seq":4,"kind":"drain","scenario":"happy","event":"action"}
+{"seq":5,"step":"s1","scenario":"happy","event":"exec","job":1}
+{"seq":6,"step":"s2","scenario":"happy","event":"exec","job":1}
+{"state":"succeeded","seq":7,"scenario":"happy","event":"state","job":1,"attempt":1,"steps":["s1","s2"],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}

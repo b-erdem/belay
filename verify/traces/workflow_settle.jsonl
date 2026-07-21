@@ -1,0 +1,8 @@
+{"seq":1,"scenario":"workflow_settle","event":"scenario_init"}
+{"seq":2,"kind":"insert","scenario":"workflow_settle","event":"action","job":1,"wf":"a"}
+{"seq":3,"kind":"insert","deps":["a"],"scenario":"workflow_settle","event":"action","job":2,"wf":"b"}
+{"state":"ready","seq":4,"scenario":"workflow_settle","event":"state","job":1,"attempt":0,"steps":[],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}
+{"state":"held","seq":5,"scenario":"workflow_settle","event":"state","job":2,"attempt":0,"steps":[],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}
+{"seq":6,"kind":"drain","scenario":"workflow_settle","event":"action"}
+{"state":"failed","seq":7,"scenario":"workflow_settle","event":"state","job":1,"attempt":1,"steps":[],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}
+{"state":"cancelled","seq":8,"scenario":"workflow_settle","event":"state","job":2,"attempt":0,"steps":[],"cancel_requested":false,"spent_usd_micros":0,"budget_usd_micros":null}

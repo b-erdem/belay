@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+- **Formal verification layer (`verify/`).** A TLA+ model of the
+  durable-execution core (journaling, budgets, cooperative cancel,
+  crash/reclaim, settlement), generated from source + execution traces and
+  exhaustively checked by TLC — 1,525,104 distinct states, zero violations.
+  Validated by mutation: reverting either known production bug in the model
+  (the budget crash window; the cancel-request clear) yields a TLC
+  counterexample matching the real-world failure step for step.
+
 ### Fixed
 - **Budgets are now enforced before every step execution, not only after.**
   The 7-hour endurance soak (99,004 jobs, 4,978 worker kills, 13 Postgres

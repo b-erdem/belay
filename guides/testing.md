@@ -104,6 +104,7 @@ production), here is the taxonomy of the suite and what each layer is for:
 | Adapter equivalence | `adapter_equivalence_test.exs` | Random command sequences applied to Memory and Postgres in lockstep, full-state dumps compared after every step. Found a real bug on its first run (a pending cancel request was silently dropped by the Postgres ack path) |
 | Chaos soak | `soak/` (not in `mix test`) | Crash-consistency: worker `kill -9`, DB restarts, then 13 invariants verified by reading the database — no lost jobs, no double effects, no stuck states |
 | Performance | `bench/` (not in `mix test`) | Dispatch latency and throughput, measured and recorded in docs — deliberately outside CI because timing assertions flake |
+| Model checking | `verify/` (not in `mix test`) | A TLA+ model of the durable-execution core, exhaustively checked by TLC (1.5M states). Validated by mutation: reverting either of the two known production bugs in the model produces a counterexample. The soak samples the state space; TLC exhausts it |
 
 Two rules keep the suite honest:
 

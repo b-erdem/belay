@@ -1,0 +1,12 @@
+{"seq":1,"scenario":"budget_crash_window","event":"scenario_init"}
+{"seq":2,"kind":"insert","scenario":"budget_crash_window","event":"action","job":1,"budget_usd_micros":500000}
+{"seq":3,"kind":"claim","scenario":"budget_crash_window","event":"action","job":1,"attempt":1}
+{"seq":4,"step":"b1","scenario":"budget_crash_window","event":"exec","job":1}
+{"seq":5,"step":"b2","scenario":"budget_crash_window","event":"exec","job":1}
+{"seq":6,"step":"b3","scenario":"budget_crash_window","event":"exec","job":1}
+{"seq":7,"kind":"crash","scenario":"budget_crash_window","event":"action","job":1}
+{"seconds":2,"seq":8,"kind":"advance","scenario":"budget_crash_window","event":"action","t":1767571202000000}
+{"seq":9,"kind":"reclaim","scenario":"budget_crash_window","event":"action","job":1}
+{"state":"ready","seq":10,"scenario":"budget_crash_window","event":"state","job":1,"attempt":1,"steps":["b1","b2","b3"],"cancel_requested":false,"spent_usd_micros":600000,"budget_usd_micros":500000}
+{"seq":11,"kind":"drain","scenario":"budget_crash_window","event":"action"}
+{"state":"failed","seq":12,"scenario":"budget_crash_window","event":"state","job":1,"attempt":2,"steps":["b1","b2","b3"],"cancel_requested":false,"spent_usd_micros":600000,"budget_usd_micros":500000}
