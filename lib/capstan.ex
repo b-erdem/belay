@@ -144,7 +144,10 @@ defmodule Capstan do
   Insert a job built with `WorkerModule.new(input, opts)`.
 
   Options on `new/2`: `:queue`, `:priority`, `:max_attempts`, `:schedule_in`,
-  `:partition_key`, `:meta`, `:budget` (`[usd: 5.0, tokens: 100_000]`).
+  `:partition_key`, `:meta`, `:budget` (`[usd: 5.0, tokens: 100_000]`), and
+  `:unique` — either `"key"` (dedupe while incomplete) or
+  `[key: k, within: seconds]` (dedupe per time window). A deduped insert
+  returns the existing job flagged `duplicate?: true`.
   """
   @spec insert(instance(), buildable()) :: {:ok, Job.t()}
   def insert(name, {Capstan.Worker, worker, input, opts}) do
