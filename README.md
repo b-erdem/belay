@@ -47,6 +47,44 @@ Capstan.insert(MyApp.Capstan,
   MyApp.ResearchAgent.new(%{"url" => url}, budget: [usd: 1.00], unique: "research:#{url}"))
 ```
 
+## No surprise bills
+
+Every AI app that ships a free tier meets the same monster: usage spikes,
+retries multiply LLM calls, and the provider invoice arrives before the
+dashboard does. Capstan enforces spend **in the engine**, in three layers:
+
+```elixir
+# 1. Per-job hard cap — one runaway agent can never exceed its budget.
+#    Enforced BEFORE each step against durable spend (model-checked across
+#    crash/retry windows — not even kill -9 mid-failure buys an extra step).
+MyApp.ResearchAgent.new(input, budget: [usd: 1.00])
+
+# 2. Fleet-wide caps per window — resource buckets span every queue that
+#    names them. Units are yours: tokens... or cents.
+queues: [
+  ai: [limit: 20,
+       rate: [resource: "anthropic_tokens", allowed: 2_000_000, period: 60, estimate: 3_000]],
+  enrich: [limit: 10,
+       rate: [resource: "spend_cents", allowed: 5_000, period: 86_400, estimate: 2]]
+]
+# ^ that second line is a global kill-switch: at most $50/day, app-wide.
+#   When the window is spent, claims stop; work queues instead of billing.
+
+# 3. True-up — estimates are corrected by actuals, so windows converge on
+#    what the invoice will actually say:
+Capstan.step(ctx, :summarize, fn ->
+  %{text: text, usage: usage} = llm!(prompt)
+  Capstan.debit(ctx, "anthropic_tokens", usage.total_tokens)
+  Capstan.debit(ctx, "spend_cents", usage.cost_cents)
+  text
+end, cost: [usd: 0.02])
+```
+
+Retries make this worse everywhere else — each attempt re-spends. Here they
+make it better: finished steps replay from the journal at zero cost, and
+the budget check reads *durable* spend, so an attempt can never "forget"
+what previous attempts already paid.
+
 ## Why Capstan
 
 - **The journal is the core.** Steps, costs, events, and results are
@@ -107,12 +145,26 @@ Numbers from this repo's reproducible harnesses on a laptop (Postgres 16):
 | Dispatch, same node | **8.6ms** p50 insert→result | `bench/run.sh` |
 | Dispatch, cross-process + `pg_notify` | **11.0ms** p50 / 24.5ms p99 | `bench/run.sh` |
 | Throughput (unbatched acks, 3 workers) | ~416 jobs/s end-to-end | `bench/throughput.exs` |
-| Chaos soak | 990 jobs · 50 `kill -9` · 2 DB restarts · **13/13 invariants** | `soak/run.sh` → report committed in `soak/REPORT.md` |
-| Suites | 81 (memory) + 87 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
+| Endurance soak (7h) | 99,004 jobs · 4,978 `kill -9` · 13 DB restarts · **13/13 invariants** | `soak/run.sh` → reports in `soak/reports/` |
+| Model checking | **187,975,659 distinct states, zero violations** (TLC, complete to depth 49) | `verify/spec/` |
+| Schedule exploration | READ COMMITTED wake race reproduced + fix proven across 400 schedules | `verify/wake_protocol/` |
+| Suites | 115 (memory) + 122 (Postgres), same tests, `--warnings-as-errors` | `mix test` |
 
-The soak found two real concurrency bugs before any user could
-([CHANGELOG](CHANGELOG.md), rc.2); the fixes and their race lessons are
-codified in the [wire contract](SCHEMA.md).
+Four real bugs were found by these harnesses before any user could — two by
+chaos, one by adapter-equivalence property testing, two by extending the
+formal model — and each layer is validated by *rediscovery*: revert any fix
+in the model and TLC produces the production failure, step for step
+([CHANGELOG](CHANGELOG.md), [verify/](verify/README.md)). The race lessons
+are codified in the [wire contract](SCHEMA.md).
+
+## Proven on a real app
+
+The first design-partner port replaced Oban in a production-shaped Phoenix
+ingestion service (4 workers, webhooks, GDPR deletion flows, hourly cron,
+uniqueness everywhere): **222/222 tests green and a live-producer run on the
+first attempt, with zero engine changes required**. Dead-node recovery
+tightened from a conservative 45-minute rescue plugin to ~2× a 60-second
+lease — renewed leases replace guessing.
 
 ## Quick start
 
@@ -167,11 +219,11 @@ by the same soak harness, sharing one database with Elixir workers.
 
 ## Status
 
-**1.0.0-rc.** Feature-complete and chaos-soaked; new — the design is
-careful and the suites are strong, but production miles are the one feature
-that can't be rushed. The path to 1.0 final (endurance soak, design
-partners) is public in [docs/ZERO_TO_ONE.md](docs/ZERO_TO_ONE.md).
-Post-1.0: SQLite storage, batched acking, Python/TypeScript SDKs.
+**1.0.0-rc.** Feature-complete; endurance-soaked, model-checked, and
+carrying its first real application — new, honestly: production miles are
+the one feature that can't be rushed. The remaining path to 1.0 final is
+public in [docs/ZERO_TO_ONE.md](docs/ZERO_TO_ONE.md). Post-1.0: SQLite
+storage, batched acking, Python/TypeScript SDKs.
 
 ## License
 
