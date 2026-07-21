@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
 
-![The embedded dashboard](assets/dashboard.png)
+![The embedded dashboard, live](assets/dashboard-live.gif)
 
 Classic job queues retry *whole jobs*. That was fine when jobs sent emails —
 it's ruinous when attempt one spent ninety seconds and $0.40 of tokens
@@ -112,7 +112,7 @@ what previous attempts already paid.
 Workflows, fan-outs, and agent-spawned children render as a live graph —
 deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 
-![Workflow DAG](assets/workflow-dag.png)
+![Workflow DAG completing](assets/workflow-dag.gif)
 
 ## Feature tour
 

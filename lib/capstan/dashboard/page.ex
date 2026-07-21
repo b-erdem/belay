@@ -217,6 +217,9 @@ defmodule Capstan.Dashboard.Page do
   }
 
   function connect() {
+    // ?sse=0 renders a static snapshot — for screenshot/automation tooling
+    // that waits on network idle (headless browsers hang on open streams).
+    if (new URLSearchParams(location.search).get('sse') === '0') return;
     const es = new EventSource(auth('/api/sse'));
     es.onmessage = e => { renderOverview(JSON.parse(e.data)); document.getElementById('live').style.opacity = 1; };
     es.onerror = () => { document.getElementById('live').style.opacity = .3; };
