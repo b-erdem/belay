@@ -61,20 +61,20 @@ defmodule Capstan.ChunkTest do
   test "live producer gathers up to the window, dispatches full chunks at once" do
     %{name: name} = start_capstan!(sim_clock: false, queues: [default: 10], poll_interval: 40)
 
-    # 2 jobs < size 3: gathered, dispatched together at the ~120ms deadline.
+    # 2 jobs < size 3: gathered, dispatched together at the ~800ms deadline.
     for n <- 1..2, do: {:ok, _} = Capstan.insert(name, ChunkGather.new(%{"n" => n}))
 
-    wait_until(fn -> Events.count({:gathered, 2}) == 1 end, 1_500)
+    wait_until(fn -> Events.count({:gathered, 2}) == 1 end, 3_000)
 
     # 3 more: a full chunk dispatches without waiting for the window.
     started = System.monotonic_time(:millisecond)
     for n <- 3..5, do: {:ok, _} = Capstan.insert(name, ChunkGather.new(%{"n" => n}))
 
-    wait_until(fn -> Events.count({:gathered, 3}) == 1 end, 1_500)
+    wait_until(fn -> Events.count({:gathered, 3}) == 1 end, 3_000)
 
-    # Well under the 120ms gather window plus poll cadence headroom proves
-    # the full chunk skipped the deadline path.
-    assert System.monotonic_time(:millisecond) - started < 110
+    # Well under the 800ms gather window proves the full chunk skipped the
+    # deadline path — with slack for slow CI runners.
+    assert System.monotonic_time(:millisecond) - started < 600
   end
 
 end

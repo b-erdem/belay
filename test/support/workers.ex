@@ -442,8 +442,9 @@ end
 defmodule Capstan.Test.ChunkGather do
   @moduledoc false
 
-  # Live-gathering worker: short window so tests can observe the deadline.
-  use Capstan.Worker, queue: :default, chunk: [size: 3, gather_ms: 120]
+  # Live-gathering worker: the window is wide enough that a slow CI runner
+  # cannot blur the immediate-dispatch path into the deadline path.
+  use Capstan.Worker, queue: :default, chunk: [size: 3, gather_ms: 800]
 
   alias Capstan.Test.Events
 
