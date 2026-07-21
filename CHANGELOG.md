@@ -41,6 +41,15 @@
   scaling stays a recipe: drive runtime `Queues.put/3` (also over MCP, so an
   agent can do it).
 
+- **Dashboard v2.** KPI strip with live throughput and **spend-rate**
+  sparklines (trailing-window snapshots persisted client-side), queue rows
+  with limit-utilization bars (adaptive ranges shown as min–max), a
+  two-line job list with args previews, durations, per-job cost badges and
+  state-chip filters, and a restyled journal-timeline drawer. The spend
+  KPI rides the same single stats scan the counts already paid for
+  (`queue_stats` now returns spend sums); job summaries gained
+  `max_attempts`, `input_preview`, `spent_usd_micros`, `started_at`.
+  `?sse=0` renders a static snapshot for screenshot tooling.
 - **`mix capstan.migrate_oban`** — move an Oban installation's pending
   work in one command: dry-run analyzer (state census, per-worker port
   verification, `executing`-row warnings), faithful conversion

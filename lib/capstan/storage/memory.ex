@@ -464,9 +464,15 @@ defmodule Capstan.Storage.Memory do
     stats =
       state.jobs
       |> Map.values()
-      |> Enum.frequencies_by(&{&1.queue, &1.state})
-      |> Enum.map(fn {{queue, job_state}, count} ->
-        %{queue: queue, state: job_state, count: count}
+      |> Enum.group_by(&{&1.queue, &1.state})
+      |> Enum.map(fn {{queue, job_state}, jobs} ->
+        %{
+          queue: queue,
+          state: job_state,
+          count: length(jobs),
+          usd_micros: jobs |> Enum.map(&(&1.spent_usd_micros || 0)) |> Enum.sum(),
+          tokens: jobs |> Enum.map(&(&1.spent_tokens || 0)) |> Enum.sum()
+        }
       end)
       |> Enum.sort_by(&{&1.queue, &1.state})
 

@@ -18,9 +18,21 @@ defmodule Capstan.View do
       "workflow" =>
         job.workflow_id &&
           %{"id" => job.workflow_id, "name" => job.wf_name, "deps" => job.wf_deps},
+      "max_attempts" => job.max_attempts,
+      "input_preview" => preview(job.input),
+      "spent_usd_micros" => job.spent_usd_micros,
       "inserted_at" => iso(job.inserted_at),
+      "started_at" => iso(job.started_at),
       "finished_at" => iso(job.finished_at)
     }
+  end
+
+  # Compact single-line input preview for list rows (dashboard/MCP); full
+  # inputs stay in job_detail. Encrypted inputs render as their envelope.
+  defp preview(input) do
+    input |> Jason.encode!() |> String.slice(0, 80)
+  rescue
+    _ -> "{}"
   end
 
   def job_detail(%Job{} = job) do

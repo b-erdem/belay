@@ -524,10 +524,24 @@ defmodule Capstan.Storage.Postgres do
 
   @impl Capstan.Storage
   def queue_stats(ref) do
+    # Spend sums ride the same single scan the counts already pay for —
+    # the dashboard's spend KPI costs no extra query.
     %{rows: rows} =
-      q!(ref, "SELECT queue, state, count(*) FROM capstan_jobs GROUP BY 1, 2 ORDER BY 1, 2", [])
+      q!(
+        ref,
+        """
+        SELECT queue, state, count(*),
+               COALESCE(SUM(spent_usd_micros), 0)::bigint,
+               COALESCE(SUM(spent_tokens), 0)::bigint
+        FROM capstan_jobs GROUP BY 1, 2 ORDER BY 1, 2
+        """,
+        []
+      )
 
-    {:ok, Enum.map(rows, fn [queue, state, count] -> %{queue: queue, state: state, count: count} end)}
+    {:ok,
+     Enum.map(rows, fn [queue, state, count, usd, tokens] ->
+       %{queue: queue, state: state, count: count, usd_micros: usd, tokens: tokens}
+     end)}
   end
 
   @impl Capstan.Storage

@@ -56,7 +56,17 @@ defmodule Capstan.Storage do
   @callback children(ref, integer()) :: {:ok, [Job.t()]}
   @callback append_event(ref, integer(), map(), now) :: {:ok, seq :: integer()}
   @callback list_events(ref, integer(), after_seq :: integer()) :: {:ok, [map()]}
-  @callback queue_stats(ref) :: {:ok, [%{queue: String.t(), state: String.t(), count: integer()}]}
+  @callback queue_stats(ref) ::
+              {:ok,
+               [
+                 %{
+                   queue: String.t(),
+                   state: String.t(),
+                   count: integer(),
+                   usd_micros: integer(),
+                   tokens: integer()
+                 }
+               ]}
   @callback list_jobs(ref, map()) :: {:ok, [Job.t()]}
   @callback retry(ref, integer(), now) :: {:ok, Job.t()} | {:error, :not_retryable | :not_found}
   @callback prune_jobs(ref, state :: String.t(), now, keep_seconds :: integer(), limit :: pos_integer()) ::

@@ -195,11 +195,24 @@ defmodule Capstan.Dashboard do
 
   defp handle(:GET, "/api/overview", _query, _body, state) do
     jobs = Capstan.list_jobs(state.capstan, limit: 30)
+    {storage, ref} = Capstan.Config.fetch!(state.capstan).storage_ref
+    {:ok, rows} = storage.queue_stats(ref)
+
+    stats =
+      Enum.reduce(rows, %{}, fn %{queue: q, state: s, count: c}, acc ->
+        Map.update(acc, q, %{s => c}, &Map.put(&1, s, c))
+      end)
+
+    spend = %{
+      "usd_micros" => rows |> Enum.map(& &1.usd_micros) |> Enum.sum(),
+      "tokens" => rows |> Enum.map(& &1.tokens) |> Enum.sum()
+    }
 
     {200,
      %{
        "instance" => inspect(state.capstan),
-       "stats" => Capstan.stats(state.capstan),
+       "stats" => stats,
+       "spend" => spend,
        "queues" => queue_specs(state),
        "recent" => Enum.map(jobs, &View.job_summary/1)
      }}
@@ -365,15 +378,21 @@ defmodule Capstan.Dashboard do
   end
 
   defp sse_push(socket, state) do
-    {_status, payload} = handle(:GET, "/api/overview", %{}, "", state)
+    # The instance can go away mid-stream (shutdown, test teardown); end the
+    # stream quietly instead of crashing the connection task.
+    {_status, payload} =
+      try do
+        handle(:GET, "/api/overview", %{}, "", state)
+      catch
+        _, _ -> {:halt, nil}
+      end
 
-    case :gen_tcp.send(socket, ["data: ", Jason.encode!(payload), "\n\n"]) do
-      :ok ->
-        Process.sleep(1_000)
-        sse_push(socket, state)
-
-      {:error, _} ->
-        :ok
+    with false <- payload == nil,
+         :ok <- :gen_tcp.send(socket, ["data: ", Jason.encode!(payload), "\n\n"]) do
+      Process.sleep(1_000)
+      sse_push(socket, state)
+    else
+      _ -> :ok
     end
   end
 
