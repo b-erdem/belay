@@ -492,17 +492,27 @@ defmodule Capstan.Storage.Memory do
         {:reply, {:error, :not_found}, state}
 
       %Job{state: s} = job when s in ~w(failed cancelled) ->
+        # Retry is an explicit operator command issued after any pending
+        # cancel, so it clears the flag — otherwise a cooperatively
+        # cancelled job could never be retried (ready → claim → honored
+        # cancel, forever). Workflow members re-hold and go through
+        # settlement rather than skipping the dependency gate: a job whose
+        # dep is still failed is re-doomed, one whose deps are satisfied
+        # is released.
         updated = %{
           job
-          | state: "ready",
+          | state: if(job.wf_deps in [nil, []], do: "ready", else: "held"),
             ready_at: now,
+            cancel_requested: false,
             max_attempts: max(job.max_attempts, job.attempt + 1),
             lease_until: nil,
             leased_by: nil,
             finished_at: nil
         }
 
-        {:reply, {:ok, updated}, put_jobs(state, [updated])}
+        {state, _released, _cancelled} = settle_and_put(state, updated, now)
+
+        {:reply, {:ok, state.jobs[id]}, state}
 
       _ ->
         {:reply, {:error, :not_retryable}, state}
@@ -628,8 +638,11 @@ defmodule Capstan.Storage.Memory do
   defp settle_and_put(state, %Job{} = job, now) do
     state = put_jobs(state, [job])
 
+    # Settles on terminal transitions AND on re-holds (operator retry of a
+    # workflow member): a freshly re-held job needs immediate adjudication —
+    # released if its deps are satisfied, re-doomed if a dep is failed.
     {state, released, cancelled} =
-      if job.state in @terminal and job.workflow_id do
+      if (job.state in @terminal or job.state == "held") and job.workflow_id do
         wf_jobs =
           state.jobs
           |> Map.values()

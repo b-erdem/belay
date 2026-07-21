@@ -573,28 +573,55 @@ defmodule Capstan.Storage.Postgres do
 
   @impl Capstan.Storage
   def retry(ref, id, now) do
-    %{rows: rows, columns: columns} =
-      q!(
-        ref,
-        """
-        UPDATE capstan_jobs
-        SET state = 'ready', ready_at = $2, max_attempts = GREATEST(max_attempts, attempt + 1),
-            lease_until = NULL, leased_by = NULL, finished_at = NULL
-        WHERE id = $1 AND state = ANY($3)
-        RETURNING *
-        """,
-        [id, now, ~w(failed cancelled)]
-      )
+    # Retry clears any pending cancel (the retry is the operator's later,
+    # explicit intent — without this, a cooperatively-cancelled job could
+    # never be retried) and re-holds workflow members instead of skipping
+    # the dependency gate: the settle pass below releases them if deps are
+    # satisfied or re-dooms them if a dep is still failed. All under the
+    # workflow advisory lock, in one transaction, like every other settle.
+    Postgrex.transaction(ref, fn conn ->
+      %{rows: rows, columns: columns} = q!(conn, "SELECT * FROM capstan_jobs WHERE id = $1", [id])
 
-    case rows do
-      [row] ->
-        {:ok, decode_job(row, columns)}
+      case decode_jobs(rows, columns) do
+        [] ->
+          Postgrex.rollback(conn, :not_found)
 
-      [] ->
-        case q!(ref, "SELECT 1 FROM capstan_jobs WHERE id = $1", [id]) do
-          %{rows: []} -> {:error, :not_found}
-          _ -> {:error, :not_retryable}
-        end
+        [%Job{state: s} = job] when s in ["failed", "cancelled"] ->
+          if job.workflow_id do
+            q!(conn, "SELECT pg_advisory_xact_lock(hashtext($1))", [
+              "capstan_wf:" <> job.workflow_id
+            ])
+          end
+
+          target = if job.wf_deps in [nil, []], do: "ready", else: "held"
+
+          q!(
+            conn,
+            """
+            UPDATE capstan_jobs
+            SET state = $4, ready_at = $2, cancel_requested = false,
+                max_attempts = GREATEST(max_attempts, attempt + 1),
+                lease_until = NULL, leased_by = NULL, finished_at = NULL
+            WHERE id = $1 AND state = ANY($3)
+            """,
+            [id, now, ~w(failed cancelled), target]
+          )
+
+          if job.workflow_id, do: settle_workflow(conn, job.workflow_id, now)
+
+          %{rows: rows, columns: columns} =
+            q!(conn, "SELECT * FROM capstan_jobs WHERE id = $1", [id])
+
+          [final] = decode_jobs(rows, columns)
+          final
+
+        [_] ->
+          Postgrex.rollback(conn, :not_retryable)
+      end
+    end)
+    |> case do
+      {:ok, job} -> {:ok, job}
+      {:error, reason} -> {:error, reason}
     end
   end
 

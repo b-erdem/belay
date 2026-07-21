@@ -124,7 +124,8 @@ States: `ready` `running` `awaiting` `held` `paused` · terminal: `succeeded`
 - Legal writers: claim (`ready|awaiting-due → running`); ack (`running → any
   except held/paused`); wake (`awaiting → ready`); settle (`held →
   ready|cancelled`); reclaim (`running → ready|failed`); retry (`failed|
-  cancelled → ready`); cancel (`any non-terminal, non-running → cancelled`;
+  cancelled → ready`, or `→ held` for dep-bearing workflow members, §8.6);
+  cancel (`any non-terminal, non-running → cancelled`;
   `running → cancel_requested=true`).
 
 ## 5. Enqueueing
@@ -289,8 +290,19 @@ leader. Dynamic `capstan_crons` rows merge over static config by name;
 ### 8.6 Cancel, retry, pause
 Cancel: parked/held → terminal `cancelled` + settlement + parent notify;
 running → `SET cancel_requested=true`; workers MUST check the flag at step
-boundaries and self-cancel. Retry: `failed|cancelled → ready`,
-`max_attempts = GREATEST(max_attempts, attempt+1)`, clear lease/finished.
+boundaries and self-cancel. Retry (operator command): `failed|cancelled →
+ready`, or `→ held` when the job has `wf_deps` — then run workflow
+settlement (§8.3, under the workflow advisory lock, same transaction),
+which releases it if deps are satisfied or re-dooms it if a dep is still
+failed. Skipping the re-hold lets a dependent run beside a failed
+dependency (found by model checking). Retry MUST also
+`SET cancel_requested=false`: the retry is the operator's later, explicit
+intent — without this a cooperatively-cancelled job (whose flag survives
+its terminal transition by §8.2's rule) can never be retried. This
+composes with "transitions never clear the flag": that rule constrains
+engine transitions from NON-terminal states; retry clears it FROM a
+terminal state. Also `max_attempts = GREATEST(max_attempts, attempt+1)`,
+clear lease/finished.
 Pause is SDK-local (stop claiming); the `paused` state is reserved for
 operator freezes of parked jobs.
 

@@ -28,6 +28,17 @@
   foreign-written JSON rows replaying through the engine.
 
 ### Fixed
+- **Operator retry now clears a pending cancel and respects workflow
+  dependencies.** Found by extending the TLA+ model with a `Retry` action:
+  (1) retry left `cancel_requested` set, so a cooperatively-cancelled job
+  was un-retryable forever — ready, claimed, instantly re-cancelled, in a
+  loop — and a retry racing a stale cancel was silently defeated; (2) retry
+  sent workflow members straight to `ready`, so a cascade-cancelled
+  dependent could run (and succeed) while its dependency sat failed. Retry
+  now clears the flag (the operator's later intent wins) and re-holds
+  workflow members through a settlement pass under the workflow lock —
+  released if deps are satisfied, re-doomed if not. Both adapters, both
+  confirmed by failing tests against the real engine before the fix.
 - **Budgets are now enforced before every step execution, not only after.**
   The 7-hour endurance soak (99,004 jobs, 4,978 worker kills, 13 Postgres
   restarts) caught 6 jobs paying for one step past their budget: the check
