@@ -1,6 +1,6 @@
 # Formal verification and trace evidence
 
-Capstan uses several deliberately small verification artifacts instead of one
+Belay uses several deliberately small verification artifacts instead of one
 model that pretends to cover the whole engine:
 
 - `spec/` models durable step replay, fail-after-crossing budgets,
@@ -21,7 +21,7 @@ The canonical five-job fixture was completely checked by TLC:
 **187,975,659 distinct states (1,245,753,531 generated), depth 49, zero
 violations** (10 workers, 45m42s). The exact command, tool fingerprint, final
 output, and TLC fingerprint-collision estimate are preserved in
-[`verify/spec/RESULT.md`](https://github.com/b-erdem/capstan/blob/main/verify/spec/RESULT.md).
+[`verify/spec/RESULT.md`](https://github.com/b-erdem/belay/blob/main/verify/spec/RESULT.md).
 
 | Checked property | Claim inside the abstraction |
 |---|---|
@@ -35,7 +35,7 @@ output, and TLC fingerprint-collision estimate are preserved in
 `JournaledStepsNotReexecuted` is intentionally narrower than “step bodies run
 at most once.” The model treats body execution and journal commit as one action.
 The real body can run again after a crash between an external effect and the
-journal write; Capstan documents that API as at-least-once until commit.
+journal write; Belay documents that API as at-least-once until commit.
 
 ## Real-trace admission
 

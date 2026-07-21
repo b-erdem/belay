@@ -16,10 +16,10 @@ defmodule Soak.FX do
 end
 
 defmodule Soak.Step do
-  use Capstan.Worker, queue: :default, max_attempts: 15
+  use Belay.Worker, queue: :default, max_attempts: 15
 
   # expected result: n*k + k*(k+1)/2
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     %{"n" => n, "k" => k} = ctx.job.input
     planned_failures = ctx.job.input["f"] || 0
@@ -27,7 +27,7 @@ defmodule Soak.Step do
     total =
       Enum.reduce(1..k, 0, fn i, acc ->
         acc +
-          Capstan.step(ctx, "s#{i}", fn ->
+          Belay.step(ctx, "s#{i}", fn ->
             Soak.FX.effect!(ctx, "s#{i}")
             Process.sleep(5 + :rand.uniform(25))
             n + i
@@ -39,14 +39,14 @@ defmodule Soak.Step do
     {:ok, total}
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.Child do
-  use Capstan.Worker, queue: :children, max_attempts: 15
+  use Belay.Worker, queue: :children, max_attempts: 15
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     Soak.FX.effect!(ctx, :child)
     Process.sleep(5 + :rand.uniform(15))
@@ -54,30 +54,30 @@ defmodule Soak.Child do
     {:ok, ctx.job.input["v"] * 2}
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.Parent do
-  use Capstan.Worker, queue: :default, max_attempts: 15
+  use Belay.Worker, queue: :default, max_attempts: 15
 
   # expected result: Enum.sort(Enum.map(vs, & &1 * 2))
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     inputs = Enum.map(ctx.job.input["vs"], &%{"v" => &1})
-    children = Capstan.map_children(ctx, :fan, Soak.Child, inputs)
+    children = Belay.map_children(ctx, :fan, Soak.Child, inputs)
 
-    {:ok, children |> Enum.map(&Capstan.Job.result/1) |> Enum.sort()}
+    {:ok, children |> Enum.map(&Belay.Job.result/1) |> Enum.sort()}
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.FlowStep do
-  use Capstan.Worker, queue: :flow, max_attempts: 15
+  use Belay.Worker, queue: :flow, max_attempts: 15
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     Soak.FX.effect!(ctx, ctx.job.wf_name)
     Process.sleep(5 + :rand.uniform(15))
@@ -85,37 +85,37 @@ defmodule Soak.FlowStep do
     :ok
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.Awaiter do
-  use Capstan.Worker, queue: :default, max_attempts: 50
+  use Belay.Worker, queue: :default, max_attempts: 50
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
-    pre = Capstan.step(ctx, :pre, fn ->
+    pre = Belay.step(ctx, :pre, fn ->
       Soak.FX.effect!(ctx, :pre)
       1
     end)
 
-    payload = Capstan.await(ctx, :go)
+    payload = Belay.await(ctx, :go)
 
     {:ok, Map.put(payload, "pre", pre)}
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.Budget do
-  use Capstan.Worker, queue: :default, max_attempts: 3
+  use Belay.Worker, queue: :default, max_attempts: 3
 
   # With budget usd 0.5 this must fail after recording exactly 3 steps.
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     for i <- 1..5 do
-      Capstan.step(ctx, "b#{i}", fn ->
+      Belay.step(ctx, "b#{i}", fn ->
         Soak.FX.effect!(ctx, "b#{i}")
         i
       end, cost: [usd: 0.2])
@@ -126,9 +126,9 @@ defmodule Soak.Budget do
 end
 
 defmodule Soak.Uni do
-  use Capstan.Worker, queue: :default, max_attempts: 15
+  use Belay.Worker, queue: :default, max_attempts: 15
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     Soak.FX.effect!(ctx, :uni)
     Process.sleep(20)
@@ -136,14 +136,14 @@ defmodule Soak.Uni do
     :ok
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 1
 end
 
 defmodule Soak.Cron do
-  use Capstan.Worker, queue: :default, max_attempts: 5
+  use Belay.Worker, queue: :default, max_attempts: 5
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     Soak.FX.effect!(ctx, :cron)
 

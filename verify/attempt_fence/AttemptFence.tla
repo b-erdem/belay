@@ -2,7 +2,7 @@
 EXTENDS Naturals, FiniteSets
 
 (***************************************************************************)
-(* A focused model of Capstan's attempt fence. An expired worker may stay  *)
+(* A focused model of Belay's attempt fence. An expired worker may stay  *)
 (* alive after the lease is reclaimed. Its eventual ack must not overwrite  *)
 (* the replacement attempt that now owns the row.                           *)
 (***************************************************************************)

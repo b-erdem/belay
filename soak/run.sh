@@ -8,8 +8,8 @@
 set -u
 cd "$(dirname "$0")/.."
 
-export SOAK_URL="${SOAK_URL:-postgres://postgres:capstan@localhost:55433/capstan_soak}"
-DBCONT="${SOAK_DB_CONTAINER:-capstan-postgres}"
+export SOAK_URL="${SOAK_URL:-postgres://postgres:belay@localhost:55433/belay_soak}"
+DBCONT="${SOAK_DB_CONTAINER:-belay-postgres}"
 CHAOS_SECS="${SOAK_CHAOS_SECS:-150}"
 DB_EVERY="${SOAK_DB_RESTART_EVERY_SECS:-0}"
 export SOAK_WAVES="${SOAK_WAVES:-36}"

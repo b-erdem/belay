@@ -1,18 +1,18 @@
-defmodule Capstan.MixProject do
+defmodule Belay.MixProject do
   use Mix.Project
 
   @version "1.0.0-rc.5"
-  @source_url "https://github.com/b-erdem/capstan"
+  @source_url "https://github.com/b-erdem/belay"
 
   def project do
     [
-      app: :capstan,
+      app: :belay,
       version: @version,
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "Capstan",
+      name: "Belay",
       description:
         "Durable execution for Elixir on Postgres: step-resumable jobs, workflows, " <>
           "budgets, signals, and replay — without a separate workflow server.",

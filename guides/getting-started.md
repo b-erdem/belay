@@ -1,6 +1,6 @@
 # Getting started
 
-Capstan is a durable job engine that runs inside your Elixir application and
+Belay is a durable job engine that runs inside your Elixir application and
 stores everything in Postgres. It needs Postgrex, Jason, and telemetry —
 no Ecto, no Redis, no separate orchestrator service.
 
@@ -9,27 +9,27 @@ no Ecto, no Redis, no separate orchestrator service.
 ```elixir
 # mix.exs
 def deps do
-  [{:capstan, "~> 1.0.0-rc.5"}]
+  [{:belay, "~> 1.0.0-rc.5"}]
 end
 ```
 
 Create the schema once (from a release task, migration, or iex):
 
 ```elixir
-Capstan.Storage.Postgres.migrate!("postgres://user:pass@localhost/my_app")
+Belay.Storage.Postgres.migrate!("postgres://user:pass@localhost/my_app")
 ```
 
 `migrate!/1` is idempotent and versioned — safe to run on every deploy.
 
 ## Configure and start an instance
 
-Capstan reads its configuration from your application environment, keyed by
+Belay reads its configuration from your application environment, keyed by
 the instance name — the same convention as `Ecto.Repo` and
 `Phoenix.Endpoint`:
 
 ```elixir
 # config/config.exs
-config :my_app, MyApp.Capstan,
+config :my_app, MyApp.Belay,
   queues: [
     default: 10,
     mailers: [limit: 20],
@@ -37,7 +37,7 @@ config :my_app, MyApp.Capstan,
   ]
 
 # config/runtime.exs — values you only know at runtime
-config :my_app, MyApp.Capstan,
+config :my_app, MyApp.Belay,
   storage: [adapter: :postgres, url: System.fetch_env!("DATABASE_URL")]
 ```
 
@@ -47,7 +47,7 @@ Then `otp_app` pulls that config in the supervision tree:
 # application.ex
 children = [
   MyApp.Repo,
-  {Capstan, otp_app: :my_app, name: MyApp.Capstan}
+  {Belay, otp_app: :my_app, name: MyApp.Belay}
 ]
 ```
 
@@ -55,7 +55,7 @@ Inline opts on the child spec override the application-env base, so a
 computed URL or a test override can be passed directly:
 
 ```elixir
-{Capstan, otp_app: :my_app, name: MyApp.Capstan, storage: [adapter: :memory]}
+{Belay, otp_app: :my_app, name: MyApp.Belay, storage: [adapter: :memory]}
 ```
 
 Or skip `otp_app` entirely and pass everything inline — both forms accept
@@ -67,9 +67,9 @@ deduplicated by the database.
 
 ```elixir
 defmodule MyApp.WelcomeEmail do
-  use Capstan.Worker, queue: :mailers, max_attempts: 5
+  use Belay.Worker, queue: :mailers, max_attempts: 5
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     user = MyApp.Users.get!(ctx.job.input["user_id"])
 
@@ -86,7 +86,7 @@ without consuming an attempt. Raised exceptions retry.
 ## Enqueue
 
 ```elixir
-{:ok, job} = Capstan.insert(MyApp.Capstan, MyApp.WelcomeEmail.new(%{"user_id" => 42}))
+{:ok, job} = Belay.insert(MyApp.Belay, MyApp.WelcomeEmail.new(%{"user_id" => 42}))
 
 # Options on new/2:
 MyApp.WelcomeEmail.new(%{"user_id" => 42},
@@ -99,13 +99,13 @@ MyApp.WelcomeEmail.new(%{"user_id" => 42},
 )
 ```
 
-Need the outcome? `Capstan.await_result/3` gives background work RPC
+Need the outcome? `Belay.await_result/3` gives background work RPC
 ergonomics:
 
 ```elixir
-{:ok, job} = Capstan.insert(MyApp.Capstan, MyApp.Summarize.new(%{"url" => url}))
+{:ok, job} = Belay.insert(MyApp.Belay, MyApp.Summarize.new(%{"url" => url}))
 
-case Capstan.await_result(MyApp.Capstan, job.id, 30_000) do
+case Belay.await_result(MyApp.Belay, job.id, 30_000) do
   {:ok, summary} -> summary
   {:error, {:job, :failed}} -> :gave_up
   {:error, :timeout} -> :still_running
@@ -115,8 +115,8 @@ end
 ## Recurring jobs
 
 ```elixir
-{Capstan,
- name: MyApp.Capstan,
+{Belay,
+ name: MyApp.Belay,
  ...,
  crons: [
    [name: "daily-digest", expr: "0 8 * * 1-5", worker: MyApp.Digest],
@@ -134,5 +134,5 @@ exactly once cluster-wide.
 - [Building agents](agents.md) — budgets, human approval, fan-out, streaming
 - [Operations](operations.md) — leases, shutdown, retention, observability
 - [Testing](testing.md) — deterministic tests with `drain` and a SimClock
-- Add `{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}` for a read-only
+- Add `{Belay.Dashboard, belay: MyApp.Belay, port: 4004}` for a read-only
   local UI, or configure `token:` / `authorizer:` to enable operator actions

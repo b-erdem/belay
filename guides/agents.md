@@ -1,29 +1,29 @@
-# Building agents on Capstan
+# Building agents on Belay
 
 Agent workloads break classic job-queue assumptions: they run for minutes to
 days, every retry re-buys tokens, they need human decisions mid-flight, they
-fan out unpredictably, and they can spend real money fast. Capstan's
+fan out unpredictably, and they can spend real money fast. Belay's
 primitives were designed against exactly that list.
 
 ## The durable agent loop
 
 ```elixir
 defmodule MyApp.ResearchAgent do
-  use Capstan.Worker, queue: :ai, max_attempts: 10, timeout: {10, :second}
+  use Belay.Worker, queue: :ai, max_attempts: 10, timeout: {10, :second}
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     goal = ctx.job.input["goal"]
 
     Enum.reduce_while(1..20, %{messages: [system_prompt(goal)]}, fn n, state ->
       # Once a turn commits, later attempts replay it without another call.
       turn =
-        Capstan.step(ctx, "turn-#{n}", fn -> llm_turn!(state.messages) end,
+        Belay.step(ctx, "turn-#{n}", fn -> llm_turn!(state.messages) end,
           cost: [usd: turn_cost(), tokens: turn_tokens()])
 
-      Capstan.emit(ctx, %{"turn" => n, "summary" => turn.summary})
+      Belay.emit(ctx, %{"turn" => n, "summary" => turn.summary})
 
-      case Capstan.steering(ctx) do
+      case Belay.steering(ctx) do
         %{"instruction" => extra} -> {:cont, apply_steering(state, turn, extra)}
         nil -> if turn.done?, do: {:halt, finish(ctx, turn)}, else: {:cont, advance(state, turn)}
       end
@@ -33,7 +33,7 @@ end
 ```
 
 The loop's committed checkpoints are durable: turns are journaled, progress streams
-out through `emit/2`, an operator can `Capstan.steer/3` new instructions that
+out through `emit/2`, an operator can `Belay.steer/3` new instructions that
 the next boundary picks up, and a `budget:` on insert fails the run after a
 step crosses the configured limit — with the journal intact for the
 post-mortem. A provider call can still repeat in the crash-before-journal
@@ -42,17 +42,17 @@ window; pass `{job_id, step_name}` as its idempotency key when supported.
 ## Human in the loop
 
 ```elixir
-draft = Capstan.step(ctx, :draft, fn -> compose!(ctx) end)
+draft = Belay.step(ctx, :draft, fn -> compose!(ctx) end)
 
-case Capstan.await(ctx, :approval, timeout: 86_400) do
-  %{"approved" => true} -> Capstan.step(ctx, :publish, fn -> publish!(draft) end)
+case Belay.await(ctx, :approval, timeout: 86_400) do
+  %{"approved" => true} -> Belay.step(ctx, :publish, fn -> publish!(draft) end)
   %{"approved" => false, "reason" => why} -> {:cancel, {:rejected, why}}
   {:error, :timeout} -> {:cancel, :approval_expired}
 end
 ```
 
 `await/3` parks the job — zero processes, zero cost — until
-`Capstan.signal_job(name, job_id, :approval, %{"approved" => true})` arrives
+`Belay.signal_job(name, job_id, :approval, %{"approved" => true})` arrives
 from your review UI (or from the MCP `signal` tool after enabling authorized
 mutations). Signals are durable:
 delivered before the job asks, they're found immediately; races cost latency,
@@ -63,24 +63,24 @@ never correctness.
 ```elixir
 results =
   ctx
-  |> Capstan.map_children(:chunks, MyApp.SummarizeChunk,
+  |> Belay.map_children(:chunks, MyApp.SummarizeChunk,
        Enum.map(chunks, &%{"text" => &1}))
-  |> Enum.map(&Capstan.Job.result/1)
+  |> Enum.map(&Belay.Job.result/1)
 
-merged = Capstan.step(ctx, :merge, fn -> merge!(results) end)
+merged = Belay.step(ctx, :merge, fn -> merge!(results) end)
 ```
 
 Children are real jobs — they parallelize across the cluster, respect their
 queue's limits, retry independently, and show up in `list_jobs`. The parent
 parks until the last child lands. Spawning is memoized, so a parent crash
 after spawning **cannot** duplicate children. For irregular shapes, use
-`Capstan.spawn/3` + `Capstan.await_children/1` directly and grow the DAG at
+`Belay.spawn/3` + `Belay.await_children/1` directly and grow the DAG at
 runtime — the agent authors its own workflow.
 
 ## Provider limits in tokens, not requests
 
 LLM providers meter tokens per minute; queues traditionally count requests.
-Capstan's rate limiter does both:
+Belay's rate limiter does both:
 
 ```elixir
 queues: [
@@ -93,8 +93,8 @@ Admission divides the window's remaining tokens by the per-job `estimate`;
 inside the job you correct the record with reality:
 
 ```elixir
-response = Capstan.step(ctx, :call, fn -> claude!(prompt) end)
-Capstan.debit(ctx, "anthropic", response.usage.total_tokens)
+response = Belay.step(ctx, :call, fn -> claude!(prompt) end)
+Belay.debit(ctx, "anthropic", response.usage.total_tokens)
 ```
 
 The debit replaces the estimate with actual usage, so the window converges on
@@ -103,10 +103,10 @@ share one provider budget.
 
 ## Streaming progress out
 
-`Capstan.emit/2` appends to a durable per-job event stream.
-`Capstan.subscribe_events/2` delivers live `{:capstan_event, id, seq, payload}`
+`Belay.emit/2` appends to a durable per-job event stream.
+`Belay.subscribe_events/2` delivers live `{:belay_event, id, seq, payload}`
 messages (a LiveView showing agent progress is a few lines);
-`Capstan.events/3` replays from any offset — reconnecting clients and
+`Belay.events/3` replays from any offset — reconnecting clients and
 crashed subscribers lose nothing.
 
 ## Dispatch fast enough for tool-call fan-outs
@@ -120,14 +120,14 @@ per child, not poll intervals.
 
 ## Let agents operate the queue
 
-`mix capstan.mcp --url postgres://...` serves an MCP server any assistant can
+`mix belay.mcp --url postgres://...` serves an MCP server any assistant can
 use to check `stats` and read jobs, steps, events, and workflows. Mutation
 tools (`retry_job`, `cancel_job`, `signal`, `steer_job`) are advertised but
 disabled by default.
 
 **Authority for operating agents.** Enable writes with a pluggable
-authorizer (`mix capstan.mcp --authorizer MyGuard`, or `authorizer:` on
-`Capstan.MCP.serve/2`): a module deciding `authorize(tool, args) → :ok |
+authorizer (`mix belay.mcp --authorizer MyGuard`, or `authorizer:` on
+`Belay.MCP.serve/2`): a module deciding `authorize(tool, args) → :ok |
 {:error, msg}` before any retry/cancel/signal/steer executes. This is the
 natural mount point for capability-token systems like
 [Legant](https://github.com/legant-dev/legant) — verify the agent's grant

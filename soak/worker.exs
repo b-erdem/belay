@@ -1,6 +1,6 @@
 # One soak worker node. Killed with -9 and respawned by run.sh throughout the
 # soak; everything it was running must be reclaimed by the survivors.
-url = System.get_env("SOAK_URL") || "postgres://postgres:capstan@localhost:55433/capstan_soak"
+url = System.get_env("SOAK_URL") || "postgres://postgres:belay@localhost:55433/belay_soak"
 tag = System.get_env("SOAK_TAG") || "w?"
 
 Code.require_file(Path.join(__DIR__, "soak_workers.exs"))
@@ -9,12 +9,12 @@ Code.require_file(Path.join(__DIR__, "soak_workers.exs"))
 
 {:ok, _} =
   url
-  |> Capstan.Storage.Postgres.parse_url()
-  |> Keyword.merge(name: SoakDB, pool_size: 5, types: Capstan.Storage.PostgresTypes)
+  |> Belay.Storage.Postgres.parse_url()
+  |> Keyword.merge(name: SoakDB, pool_size: 5, types: Belay.Storage.PostgresTypes)
   |> Postgrex.start_link()
 
 {:ok, _} =
-  Capstan.start_link(
+  Belay.start_link(
     name: SoakNode,
     storage: [adapter: :postgres, url: url],
     queues: [default: 8, children: 8, flow: 4],

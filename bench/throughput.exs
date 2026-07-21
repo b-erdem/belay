@@ -1,11 +1,11 @@
 # Drain throughput: how many trivial jobs per second the cluster processes.
-url = System.get_env("BENCH_URL") || "postgres://postgres:capstan@localhost:55433/capstan_bench"
+url = System.get_env("BENCH_URL") || "postgres://postgres:belay@localhost:55433/belay_bench"
 n = String.to_integer(System.get_env("BENCH_JOBS", "3000"))
 
 Code.require_file(Path.join(__DIR__, "bench_workers.exs"))
 
 {:ok, _} =
-  Capstan.start_link(
+  Belay.start_link(
     name: BenchDriver,
     storage: [adapter: :postgres, url: url],
     queues: [],
@@ -18,13 +18,13 @@ Process.sleep(500)
 t0 = System.monotonic_time(:millisecond)
 
 for chunk <- Enum.chunk_every(1..n, 500) do
-  Capstan.insert_all(BenchDriver, Enum.map(chunk, &Bench.Echo.new(%{"i" => &1})))
+  Belay.insert_all(BenchDriver, Enum.map(chunk, &Bench.Echo.new(%{"i" => &1})))
 end
 
 insert_ms = System.monotonic_time(:millisecond) - t0
 
 wait = fn wait ->
-  stats = Capstan.stats(BenchDriver)
+  stats = Belay.stats(BenchDriver)
   done = get_in(stats, ["default", "succeeded"]) || 0
 
   if done >= n do

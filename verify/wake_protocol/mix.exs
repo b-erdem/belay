@@ -1,9 +1,9 @@
 defmodule WakeProtocol.MixProject do
   use Mix.Project
 
-  # Standalone harness so Capstan's own dependency tree stays untouched:
+  # Standalone harness so Belay's own dependency tree stays untouched:
   # this project models the parent-wake protocol abstractly and never
-  # imports Capstan code.
+  # imports Belay code.
   def project do
     [
       app: :wake_protocol,

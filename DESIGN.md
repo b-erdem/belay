@@ -1,4 +1,4 @@
-# Capstan v2 — Standalone Design
+# Belay v2 — Standalone Design
 
 *Rethought 2026-07-20 after the decision to drop the Oban substrate entirely.
 The v0 Oban-layer implementation is preserved at git tag `v0-oban-layer`.*
@@ -32,10 +32,10 @@ tested by time-travel rather than sleeps.
 
 ## 2. Shape of the system
 
-A `Capstan` instance is a supervision tree you start in your app:
+A `Belay` instance is a supervision tree you start in your app:
 
-    {Capstan,
-     name: MyCapstan,
+    {Belay,
+     name: MyBelay,
      storage: [adapter: :postgres, url: "postgres://..."],
      queues: [
        default: 10,
@@ -85,8 +85,8 @@ translated by the runner.
 
 ## 4. The journal is the core
 
-    Capstan.step(ctx, :transcribe, fn -> whisper!(url) end)
-    Capstan.step(ctx, :summarize, fn -> llm!(text) end, cost: [tokens: 1200, usd: 0.018])
+    Belay.step(ctx, :transcribe, fn -> whisper!(url) end)
+    Belay.step(ctx, :summarize, fn -> llm!(text) end, cost: [tokens: 1200, usd: 0.018])
 
 Steps are memoized per `(job_id, name)` with a monotonic `seq`, value stored as
 a term binary, and **cost columns (`tokens`, `usd_micros`) recorded beside the
@@ -95,16 +95,16 @@ bolted on:
 
 - **Replay**: a retried job skips journaled steps — an agent loop crash
   re-buys zero tokens.
-- **Budgets**: `Capstan.insert(..., budget: [usd: 5.00])` — the engine checks
+- **Budgets**: `Belay.insert(..., budget: [usd: 5.00])` — the engine checks
   accumulated spend at every step boundary and fails the job with
   `:budget_exceeded` when crossed. "Kill this agent at $5" is a config line.
   (Per the market research, no shipping product enforces this today.)
-- **Auditability**: `capstan_steps` *is* the cost/attribution report; no
+- **Auditability**: `belay_steps` *is* the cost/attribution report; no
   separate metering pipeline.
 
-Signals are a durable per-scope inbox (`capstan_signals`), same semantics
+Signals are a durable per-scope inbox (`belay_signals`), same semantics
 proven in v0: persistent until cleared, so await/signal races only cost
-latency, never correctness. `Capstan.steering(ctx)` reads the reserved
+latency, never correctness. `Belay.steering(ctx)` reads the reserved
 `"$steer"` signal so operators (or supervising agents) can inject guidance
 into a running job at step boundaries; cooperative cancellation rides the
 same check.
@@ -162,7 +162,7 @@ serialized GenServer — deterministic by construction, used by the test suite
 and the seeded simulation tests). SQLite is deliberately deferred: Memory
 covers dev/test; PG covers production.
 
-Time comes from a `Capstan.Clock` behaviour (`System` / `Sim`). Rate windows,
+Time comes from a `Belay.Clock` behaviour (`System` / `Sim`). Rate windows,
 backoff, lease expiry, await deadlines, and cron slots are all tested by
 advancing a SimClock, never by sleeping.
 
@@ -170,7 +170,7 @@ advancing a SimClock, never by sleeping.
 
 *Written as a roadmap in the v2 design; all of it shipped across rc.1–rc.4.*
 
-- **Dynamic spawn/graft**: `Capstan.spawn_child(ctx, kind, input)` — agents
+- **Dynamic spawn/graft**: `Belay.spawn_child(ctx, kind, input)` — agents
   author their own DAGs at runtime (the Cloudflare Dynamic Workflows idea, on
   your own Postgres).
 - **Durable streams**: step-level output streaming to subscribers, surviving

@@ -1,6 +1,6 @@
-url = System.get_env("BENCH_URL") || "postgres://postgres:capstan@localhost:55433/capstan_bench"
+url = System.get_env("BENCH_URL") || "postgres://postgres:belay@localhost:55433/belay_bench"
 
-Capstan.Storage.Postgres.ensure_database!(url)
-Capstan.Storage.Postgres.reset!(url)
+Belay.Storage.Postgres.ensure_database!(url)
+Belay.Storage.Postgres.reset!(url)
 
 IO.puts("BENCH DB READY #{url}")

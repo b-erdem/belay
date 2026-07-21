@@ -20,14 +20,14 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-capstan-*.tar
+belay-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
 /tmp/
 doc/
 soak/tmp/
-capstan-*.tar
+belay-*.tar
 verify/spec/**/states/
 verify/spec/states/
 verify/spec/*.log

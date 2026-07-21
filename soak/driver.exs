@@ -2,7 +2,7 @@
 # restarts Postgres, then waits for quiescence and verifies invariants.
 # Writes soak/REPORT.md and exits non-zero on any invariant failure.
 
-url = System.get_env("SOAK_URL") || "postgres://postgres:capstan@localhost:55433/capstan_soak"
+url = System.get_env("SOAK_URL") || "postgres://postgres:belay@localhost:55433/belay_soak"
 waves = String.to_integer(System.get_env("SOAK_WAVES") || "36")
 wave_ms = String.to_integer(System.get_env("SOAK_WAVE_MS") || "3500")
 
@@ -38,12 +38,12 @@ end
 
 {:ok, _} =
   url
-  |> Capstan.Storage.Postgres.parse_url()
-  |> Keyword.merge(name: SoakDB, pool_size: 3, types: Capstan.Storage.PostgresTypes)
+  |> Belay.Storage.Postgres.parse_url()
+  |> Keyword.merge(name: SoakDB, pool_size: 3, types: Belay.Storage.PostgresTypes)
   |> Postgrex.start_link()
 
 {:ok, _} =
-  Capstan.start_link(
+  Belay.start_link(
     name: SoakDriver,
     storage: [adapter: :postgres, url: url],
     queues: [],
@@ -68,7 +68,7 @@ awaiters =
         f = rem(j, 3)
 
         {:ok, job} =
-          Capstan.insert(SoakDriver, Soak.Step.new(%{"n" => wave, "k" => k, "f" => f}))
+          Belay.insert(SoakDriver, Soak.Step.new(%{"n" => wave, "k" => k, "f" => f}))
 
         expected = wave * k + div(k * (k + 1), 2)
 
@@ -77,7 +77,7 @@ awaiters =
 
       # A fan-out parent with three children.
       vs = [wave, wave + 1, wave + 2]
-      {:ok, parent} = Capstan.insert(SoakDriver, Soak.Parent.new(%{"vs" => vs}))
+      {:ok, parent} = Belay.insert(SoakDriver, Soak.Parent.new(%{"vs" => vs}))
 
       D.ledger!(parent.id, "parent", %{"result" => Enum.sort(Enum.map(vs, &(&1 * 2)))})
     end)
@@ -86,11 +86,11 @@ awaiters =
     if rem(wave, 2) == 0 do
       D.retry(fn ->
         {:ok, jobs} =
-          Capstan.Workflow.new()
-          |> Capstan.Workflow.add(:a, Soak.FlowStep.new(%{}))
-          |> Capstan.Workflow.add(:b, Soak.FlowStep.new(%{}), deps: [:a])
-          |> Capstan.Workflow.add(:c, Soak.FlowStep.new(%{}), deps: [:b])
-          |> Capstan.Workflow.insert(SoakDriver)
+          Belay.Workflow.new()
+          |> Belay.Workflow.add(:a, Soak.FlowStep.new(%{}))
+          |> Belay.Workflow.add(:b, Soak.FlowStep.new(%{}), deps: [:a])
+          |> Belay.Workflow.add(:c, Soak.FlowStep.new(%{}), deps: [:b])
+          |> Belay.Workflow.insert(SoakDriver)
 
         for {pos, job} <- jobs do
           D.ledger!(job.id, "flow", %{"pos" => pos, "wf" => job.workflow_id})
@@ -101,7 +101,7 @@ awaiters =
     # Budget jobs must die at exactly three recorded steps.
     if rem(wave, 4) == 0 do
       D.retry(fn ->
-        {:ok, job} = Capstan.insert(SoakDriver, Soak.Budget.new(%{}, budget: [usd: 0.5]))
+        {:ok, job} = Belay.insert(SoakDriver, Soak.Budget.new(%{}, budget: [usd: 0.5]))
 
         D.ledger!(job.id, "budget", nil)
       end)
@@ -112,7 +112,7 @@ awaiters =
       D.retry(fn ->
         results =
           for _ <- 1..4 do
-            {:ok, job} = Capstan.insert(SoakDriver, Soak.Uni.new(%{}, unique: "uni:#{wave}"))
+            {:ok, job} = Belay.insert(SoakDriver, Soak.Uni.new(%{}, unique: "uni:#{wave}"))
             job
           end
 
@@ -126,7 +126,7 @@ awaiters =
     new_awaiters =
       D.retry(fn ->
         for _ <- 1..2 do
-          {:ok, job} = Capstan.insert(SoakDriver, Soak.Awaiter.new(%{}))
+          {:ok, job} = Belay.insert(SoakDriver, Soak.Awaiter.new(%{}))
 
           D.ledger!(job.id, "await", %{"result" => %{"w" => wave, "pre" => 1}})
 
@@ -137,7 +137,7 @@ awaiters =
     {due, pending} = Enum.split_with(awaiters, fn {_id, w} -> wave - w >= 2 end)
 
     for {id, w} <- due do
-      D.retry(fn -> Capstan.signal_job(SoakDriver, id, :go, %{"w" => w}) end)
+      D.retry(fn -> Belay.signal_job(SoakDriver, id, :go, %{"w" => w}) end)
     end
 
     if rem(wave, 6) == 0, do: D.log("wave #{wave}/#{waves}")
@@ -152,7 +152,7 @@ awaiters =
 D.log("waves done; signalling remaining awaiters")
 
 for {id, w} <- awaiters do
-  D.retry(fn -> Capstan.signal_job(SoakDriver, id, :go, %{"w" => w}) end)
+  D.retry(fn -> Belay.signal_job(SoakDriver, id, :go, %{"w" => w}) end)
 end
 
 await_ids =
@@ -166,7 +166,7 @@ Enum.reduce_while(1..90, nil, fn _, _ ->
     D.retry(fn ->
       %{rows: rows} =
         D.q!(
-          "SELECT id FROM capstan_jobs WHERE id = ANY($1) AND state NOT IN ('succeeded','failed','cancelled')",
+          "SELECT id FROM belay_jobs WHERE id = ANY($1) AND state NOT IN ('succeeded','failed','cancelled')",
           [Enum.map(await_ids, fn [id, _] -> id end)]
         )
 
@@ -179,7 +179,7 @@ Enum.reduce_while(1..90, nil, fn _, _ ->
     for id <- stuck do
       [_, expected] = Enum.find(await_ids, fn [i, _] -> i == id end)
 
-      D.retry(fn -> Capstan.signal_job(SoakDriver, id, :go, %{"w" => expected["result"]["w"]}) end)
+      D.retry(fn -> Belay.signal_job(SoakDriver, id, :go, %{"w" => expected["result"]["w"]}) end)
     end
 
     Process.sleep(1_000)
@@ -196,7 +196,7 @@ quiesced? =
     remaining =
       D.retry(fn ->
         %{rows: [[n]]} =
-          D.q!("SELECT count(*) FROM capstan_jobs WHERE state NOT IN ('succeeded','failed','cancelled')")
+          D.q!("SELECT count(*) FROM belay_jobs WHERE state NOT IN ('succeeded','failed','cancelled')")
 
         n
       end)
@@ -218,12 +218,12 @@ D.log("verifying invariants")
 failures = :ets.new(:failures, [:bag, :public])
 fail = fn check, detail -> :ets.insert(failures, {check, detail}) end
 
-%{rows: state_rows} = D.q!("SELECT state, count(*) FROM capstan_jobs GROUP BY 1 ORDER BY 1")
+%{rows: state_rows} = D.q!("SELECT state, count(*) FROM belay_jobs GROUP BY 1 ORDER BY 1")
 
 unless quiesced? do
   %{rows: rows} =
     D.q!(
-      "SELECT id, kind, queue, state FROM capstan_jobs WHERE state NOT IN ('succeeded','failed','cancelled') LIMIT 10"
+      "SELECT id, kind, queue, state FROM belay_jobs WHERE state NOT IN ('succeeded','failed','cancelled') LIMIT 10"
     )
 
   fail.("quiescence", "non-terminal jobs remain: #{inspect(rows)}")
@@ -231,7 +231,7 @@ end
 
 # Every ledgered job must exist.
 %{rows: missing} =
-  D.q!("SELECT l.job_id FROM soak_ledger l LEFT JOIN capstan_jobs j ON j.id = l.job_id WHERE j.id IS NULL")
+  D.q!("SELECT l.job_id FROM soak_ledger l LEFT JOIN belay_jobs j ON j.id = l.job_id WHERE j.id IS NULL")
 
 for [id] <- missing, do: fail.("lost-jobs", "ledgered job #{id} vanished")
 
@@ -239,7 +239,7 @@ for [id] <- missing, do: fail.("lost-jobs", "ledgered job #{id} vanished")
 %{rows: ledger_rows} =
   D.q!("""
   SELECT l.job_id, l.kind, l.expected, j.state, j.result, j.attempt, j.max_attempts, j.errors
-  FROM soak_ledger l JOIN capstan_jobs j ON j.id = l.job_id
+  FROM soak_ledger l JOIN belay_jobs j ON j.id = l.job_id
   """)
 
 decode = fn
@@ -272,7 +272,7 @@ for [id, kind, expected, state, result, attempt, max_attempts, errors] <- ledger
       last_error = errors |> List.last() |> Kernel.||(%{})
 
       %{rows: [[step_count]]} =
-        D.q!("SELECT count(*) FROM capstan_steps WHERE job_id = $1", [id])
+        D.q!("SELECT count(*) FROM belay_steps WHERE job_id = $1", [id])
 
       cond do
         state != "failed" -> fail.("budget", "job #{id} ended #{state}, wanted failed")
@@ -309,7 +309,7 @@ end)
 # Spawn idempotency: every soak parent has exactly three children.
 %{rows: bad_parents} =
   D.q!("""
-  SELECT j.parent_id, count(*) FROM capstan_jobs j
+  SELECT j.parent_id, count(*) FROM belay_jobs j
   JOIN soak_ledger l ON l.job_id = j.parent_id AND l.kind = 'parent'
   GROUP BY 1 HAVING count(*) != 3
   """)
@@ -318,11 +318,11 @@ for [pid, n] <- bad_parents, do: fail.("spawn-idempotency", "parent #{pid} has #
 
 # Cron slots fire exactly once cluster-wide.
 %{rows: cron_dups} =
-  D.q!("SELECT cron_name, cron_slot, count(*) FROM capstan_jobs WHERE cron_name IS NOT NULL GROUP BY 1,2 HAVING count(*) > 1")
+  D.q!("SELECT cron_name, cron_slot, count(*) FROM belay_jobs WHERE cron_name IS NOT NULL GROUP BY 1,2 HAVING count(*) > 1")
 
 for [name, slot, n] <- cron_dups, do: fail.("cron-dedup", "#{name}@#{slot} fired #{n} times")
 
-%{rows: [[cron_count]]} = D.q!("SELECT count(*) FROM capstan_jobs WHERE cron_name IS NOT NULL")
+%{rows: [[cron_count]]} = D.q!("SELECT count(*) FROM belay_jobs WHERE cron_name IS NOT NULL")
 
 # At-least-once accounting: duplicate step-body executions (crash windows).
 %{rows: dup_rows} =
@@ -360,7 +360,7 @@ chaos_log =
 kills = chaos_log |> String.split("\n") |> Enum.count(&String.starts_with?(&1, "KILL"))
 db_restarts = chaos_log |> String.split("\n") |> Enum.count(&String.starts_with?(&1, "DBRESTART"))
 
-%{rows: [[total_jobs]]} = D.q!("SELECT count(*) FROM capstan_jobs")
+%{rows: [[total_jobs]]} = D.q!("SELECT count(*) FROM belay_jobs")
 %{rows: kind_rows} = D.q!("SELECT kind, count(*) FROM soak_ledger GROUP BY 1 ORDER BY 1")
 
 all_failures = :ets.tab2list(failures)

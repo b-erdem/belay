@@ -27,7 +27,7 @@ pre-launch adversarial review.
   a conformance path (the soak driver verifies any foreign worker SDK by
   reading the database). Groundwork for Python/TypeScript SDKs as thin
   contract implementations rather than rewrites.
-- **`Capstan.Codec` — cross-language value envelope.** Step values and job
+- **`Belay.Codec` — cross-language value envelope.** Step values and job
   results now decode as Erlang term format (leading byte 131, written by
   Elixir) *or* UTF-8 JSON (written by any other SDK); tested with
   foreign-written JSON rows replaying through the engine.
@@ -54,7 +54,7 @@ pre-launch adversarial review.
   (`queue_stats` now returns spend sums); job summaries gained
   `max_attempts`, `input_preview`, `spent_usd_micros`, `started_at`.
   `?sse=0` renders a static snapshot for screenshot tooling.
-- **`mix capstan.migrate_oban`** — move an Oban installation's pending
+- **`mix belay.migrate_oban`** — move an Oban installation's pending
   work in one command: dry-run analyzer (state census, per-worker port
   verification, `executing`-row warnings), faithful conversion
   (schedules, retry counts, errors, priority), `--map` renames, and
@@ -114,26 +114,26 @@ The "better at every dimension" release: the embedded dashboard, transactional
 enqueue, runtime CRUD, encryption, and exact partitioned claims.
 
 ### Added
-- **`Capstan.Dashboard`** — an embedded web dashboard with zero dependencies
+- **`Belay.Dashboard`** — an embedded web dashboard with zero dependencies
   (hand-rolled HTTP over `gen_tcp`, single-file UI, SSE live updates): queue
   tiles with limits and live counts, filterable job list, a journal drawer
   (steps with costs, events, errors, children), a rendered **workflow DAG**,
   and retry/cancel/signal/steer actions. Tokenless dashboards are read-only;
   writes require a token or the same pluggable authorizer as the MCP server.
-- **`Capstan.Txn`** — transactional enqueue inside your own Postgrex or Ecto
+- **`Belay.Txn`** — transactional enqueue inside your own Postgrex or Ecto
   transaction (duck-typed over `query!`; still no Ecto dependency). With the
   `:postgres` notifier, the wake-up is issued via `pg_notify` *inside* the
   transaction, so it delivers exactly on commit and never on rollback.
-- **Runtime queue and cron CRUD** — `Capstan.Queues.put/delete/list` and
-  `Capstan.Crons.put/delete/pause/resume/list`, persisted in the database,
+- **Runtime queue and cron CRUD** — `Belay.Queues.put/delete/list` and
+  `Belay.Crons.put/delete/pause/resume/list`, persisted in the database,
   validated eagerly, reconciled by every node's `QueueSync` (producers now
   live under a DynamicSupervisor); dynamic entries override static config by
   name. Leaderless, like everything else.
-- **Encrypted inputs** — `use Capstan.Worker, encrypted: true` plus
+- **Encrypted inputs** — `use Belay.Worker, encrypted: true` plus
   `encryption: [key: {mod, fun, args}]`: AES-256-GCM envelopes at rest,
   plaintext only inside the executing process; schemas validate before
   encryption; replay decrypts transparently.
-- Shared view serializers (lib/capstan/view.ex) so the dashboard and MCP describe jobs
+- Shared view serializers (lib/belay/view.ex) so the dashboard and MCP describe jobs
   identically.
 - `bench/throughput.exs` — measured ~416 trivial jobs/s end-to-end on a
   laptop (3 worker processes, unbatched acks).
@@ -153,7 +153,7 @@ unconnected OS processes with the new notifier, ~50ms p50 on adaptive
 polling alone (vs ~250ms average before).
 
 ### Added
-- **Notifier layer** (`Capstan.Notifier`): wake-ups as accelerators, never
+- **Notifier layer** (`Belay.Notifier`): wake-ups as accelerators, never
   load-bearing. `:local` (registry + `:pg`, always on) and opt-in
   `:postgres` — `pg_notify` pokes and result notifications across fleets
   that share Postgres but not an Erlang cluster, with a dedicated
@@ -165,8 +165,8 @@ polling alone (vs ~250ms average before).
   poke storms coalesce into single claim rounds.
 - **Fast `await_result`**: wakes on result notifications; otherwise
   re-checks on a 5ms→200ms backoff instead of a fixed 200ms.
-- **MCP authorizer hook**: `mix capstan.mcp --authorizer MyGuard` (or
-  `authorizer:` on `Capstan.MCP.serve/2`) gates the mutating tools
+- **MCP authorizer hook**: `mix belay.mcp --authorizer MyGuard` (or
+  `authorizer:` on `Belay.MCP.serve/2`) gates the mutating tools
   (retry/cancel/signal/steer) behind `authorize(tool, args)` — the mount
   point for capability-token systems (e.g. Legant) supervising operating
   agents.
@@ -233,7 +233,7 @@ First release candidate. Everything below ships open, Apache-2.0.
   sliding-window `rate` limits, per-key `partition` fairness.
 
 ### The agent layer
-- **Durable steps** (`Capstan.step/4`): memoized per job with cost columns —
+- **Durable steps** (`Belay.step/4`): memoized per job with cost columns —
   retries replay past completed work.
 - **Budgets** (`budget: [usd:, tokens:]`): jobs fail with `:budget_exceeded`
   the moment accumulated step costs cross the cap.
@@ -248,7 +248,7 @@ First release candidate. Everything below ships open, Apache-2.0.
 - **Batches**: transparent sugar over workflows with an any-outcome
   `on_complete` callback.
 - **Durable event streams**: `emit/2` + live subscriptions + offset replay.
-- **Replay debugging**: `Capstan.Replay.dry_run/2` re-runs job code against
+- **Replay debugging**: `Belay.Replay.dry_run/2` re-runs job code against
   the recorded journal, side-effect-free, with precise divergence reports.
 - **Token-resource rate limits**: shared resource buckets with estimated
   admission and post-hoc true-up via `debit/3`.
@@ -256,8 +256,8 @@ First release candidate. Everything below ships open, Apache-2.0.
 
 ### Operability
 - `stats/1`, `list_jobs/2`, `retry_job/2`, `steps/2`, `events/3`.
-- Telemetry spans with durations; `Capstan.Telemetry.attach_default_logger/1`.
-- **MCP server** (`mix capstan.mcp`): stats/jobs/steps/events introspection
+- Telemetry spans with durations; `Belay.Telemetry.attach_default_logger/1`.
+- **MCP server** (`mix belay.mcp`): stats/jobs/steps/events introspection
   plus retry/cancel/signal/steer, over stdio JSON-RPC.
 
 ### Storage

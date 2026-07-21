@@ -24,8 +24,8 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: capstan
-          POSTGRES_DB: capstan_v2_test
+          POSTGRES_PASSWORD: belay
+          POSTGRES_DB: belay_v2_test
         ports: ["55433:5432"]
         options: >-
           --health-cmd pg_isready
@@ -58,7 +58,7 @@ jobs:
       - run: mix test
         if: matrix.storage == 'postgres'
         env:
-          CAPSTAN_PG: "1"
+          BELAY_PG: "1"
 
   quality:
     name: Format, docs, and package

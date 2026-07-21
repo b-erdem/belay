@@ -2,7 +2,7 @@
 
 ## Checklist
 - [ ] `mix compile --warnings-as-errors` clean
-- [ ] `mix test` and `CAPSTAN_PG=1 mix test` both green
+- [ ] `mix test` and `BELAY_PG=1 mix test` both green
 - [ ] Storage semantics touched? Implemented in **both** adapters, shared
       logic in `Storage.Logic`, covered by a test that runs against both
 - [ ] No wall-clock reads in engine code (`now` is always a parameter)

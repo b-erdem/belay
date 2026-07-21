@@ -4,7 +4,7 @@ What actually happens in production, and the knobs you own.
 
 ## Delivery guarantees, stated plainly
 
-Capstan is **at-least-once**. A worker that dies after doing the work but
+Belay is **at-least-once**. A worker that dies after doing the work but
 before acking will have the job re-run — with the crucial mitigation that
 memoized steps make the re-run skip everything the first run recorded.
 Two windows to know about:
@@ -26,7 +26,7 @@ under your platform's kill timeout.
 ## Dispatch latency
 
 Agent workloads are bursts of short tasks, so dispatch overhead is the
-product. Capstan layers three mechanisms — each optional layer only buys
+product. Belay layers three mechanisms — each optional layer only buys
 latency; polling remains the correctness floor:
 
 1. **Local pokes** (always on): inserts, releases, and completions poke
@@ -55,7 +55,7 @@ Honest caveats, with receipts: Postgres
 serializes NOTIFY-issuing commits on a global lock (the Recall.ai outage
 class; ~190k vs ~350k TPS with/without it in pgsql-hackers benchmarks —
 present through PG 18, and PG 19's fix covers only the listener-wake side).
-Capstan stays far from that zone by coalescing to one `pg_notify` per queue
+Belay stays far from that zone by coalescing to one `pg_notify` per queue
 per insert batch/completion, and the accelerator is droppable at any time —
 `[:local]` keeps the adaptive-polling latencies above. The pooler rule:
 `pg_notify` through PgBouncer is fine; only the **listen** connection needs
@@ -87,14 +87,14 @@ and execution at all.
 INSERT, one batch-priced embeddings call:
 
 ```elixir
-use Capstan.Worker, queue: :embeddings, chunk: [size: 100, gather_ms: 500]
+use Belay.Worker, queue: :embeddings, chunk: [size: 100, gather_ms: 500]
 ```
 
 The producer gathers claimed jobs per worker up to `size`, waiting at most
 `gather_ms` for stragglers (full chunks dispatch immediately). Gathered jobs
 are already leased, so a crash mid-gather reclaims them like any other
 crash; the gather window is clamped to half the lease TTL. See
-`Capstan.Worker` for the `run_chunk/1` contract including per-job partial
+`Belay.Worker` for the `run_chunk/1` contract including per-job partial
 failure.
 
 **Adaptive concurrency** scales a queue's per-node limit with load:
@@ -106,10 +106,10 @@ queues: [ingest: [limit: [min: 2, max: 50]]]
 Saturated claim rounds double the limit toward `max`; an idle queue decays
 back to `min`. Leaderless — each node adapts its own limit, and
 `global_limit`, rate limits, and partition fairness still bound the fleet
-exactly. Scale changes emit `[:capstan, :queue, :scale]`.
+exactly. Scale changes emit `[:belay, :queue, :scale]`.
 
 For policy-driven scaling (queue depth thresholds, business hours, an
-operating agent watching costs), drive `Capstan.Queues.put/3` from your own
+operating agent watching costs), drive `Belay.Queues.put/3` from your own
 logic — it is runtime CRUD reconciled by every node. The bundled MCP server
 does not currently expose queue-definition CRUD.
 
@@ -118,7 +118,7 @@ does not currently expose queue-definition CRUD.
 Terminal jobs are pruned with their steps and events by the sweeper:
 
 ```elixir
-{Capstan,
+{Belay,
  ...,
  retention: [succeeded: 86_400, failed: 7 * 86_400, cancelled: 7 * 86_400],
  signal_ttl: 7 * 86_400}
@@ -132,7 +132,7 @@ Incomplete jobs are never pruned.
 One child spec, zero dependencies:
 
 ```elixir
-{Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004, token: System.fetch_env!("DASH_TOKEN")}
+{Belay.Dashboard, belay: MyApp.Belay, port: 4004, token: System.fetch_env!("DASH_TOKEN")}
 ```
 
 Live queue tiles (with each queue's limits and rates), a filterable job
@@ -146,30 +146,30 @@ remote access.
 ## Day-2 tooling
 
 ```elixir
-Capstan.stats(MyApp.Capstan)
+Belay.stats(MyApp.Belay)
 #=> %{"ai" => %{"ready" => 12, "running" => 2}, "default" => %{"succeeded" => 1043}}
 
-Capstan.list_jobs(MyApp.Capstan, state: :failed, limit: 20)
-Capstan.retry_job(MyApp.Capstan, job_id)
-Capstan.cancel(MyApp.Capstan, job_id)      # immediate when parked, cooperative when running
-Capstan.pause_queue(MyApp.Capstan, :ai)    # local producer stops claiming
-Capstan.steps(MyApp.Capstan, job_id)       # the journal, costs included
-Capstan.events(MyApp.Capstan, job_id)      # the emitted stream
-Capstan.Replay.dry_run(MyApp.Capstan, job_id)  # what did it actually do?
+Belay.list_jobs(MyApp.Belay, state: :failed, limit: 20)
+Belay.retry_job(MyApp.Belay, job_id)
+Belay.cancel(MyApp.Belay, job_id)      # immediate when parked, cooperative when running
+Belay.pause_queue(MyApp.Belay, :ai)    # local producer stops claiming
+Belay.steps(MyApp.Belay, job_id)       # the journal, costs included
+Belay.events(MyApp.Belay, job_id)      # the emitted stream
+Belay.Replay.dry_run(MyApp.Belay, job_id)  # what did it actually do?
 ```
 
 The same inspection surface is exposed to AI assistants and scripts through
-`mix capstan.mcp`. Mutations are disabled unless you pass
+`mix belay.mcp`. Mutations are disabled unless you pass
 `--authorizer MyGuard` or explicitly opt in with `--allow-mutations`.
 
 ## Telemetry
 
-Events: `[:capstan, :job, :start | :stop | :exception]` with durations and
+Events: `[:belay, :job, :start | :stop | :exception]` with durations and
 job metadata. For one-line structured logs:
 
 ```elixir
-Capstan.Telemetry.attach_default_logger(:info)
-# capstan job=812 worker=MyApp.Agent queue=ai state=succeeded attempt=1 duration=8143ms
+Belay.Telemetry.attach_default_logger(:info)
+# belay job=812 worker=MyApp.Agent queue=ai state=succeeded attempt=1 duration=8143ms
 ```
 
 ## Postgres notes

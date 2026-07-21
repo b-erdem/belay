@@ -1,11 +1,11 @@
-<p align="center"><strong>⚓ Capstan</strong></p>
+<p align="center"><strong>⚓ Belay</strong></p>
 <p align="center"><strong>Durable execution for Elixir — without a workflow server.</strong></p>
 <p align="center">Resume at the first unfinished step. Add budgets, signals, DAGs, replay, and an embedded dashboard. Keep it all on Postgres.</p>
 
 <p align="center">
-  <a href="https://github.com/b-erdem/capstan/actions/workflows/ci.yml"><img src="https://github.com/b-erdem/capstan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://hex.pm/packages/capstan"><img src="https://img.shields.io/hexpm/v/capstan.svg" alt="Hex"></a>
-  <a href="https://hexdocs.pm/capstan"><img src="https://img.shields.io/badge/hex-docs-8e64dd" alt="Docs"></a>
+  <a href="https://github.com/b-erdem/belay/actions/workflows/ci.yml"><img src="https://github.com/b-erdem/belay/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://hex.pm/packages/belay"><img src="https://img.shields.io/hexpm/v/belay.svg" alt="Hex"></a>
+  <a href="https://hexdocs.pm/belay"><img src="https://img.shields.io/badge/hex-docs-8e64dd" alt="Docs"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
 
@@ -13,7 +13,7 @@
 
 Background jobs get awkward when one run contains twelve paid API calls, a
 human approval, and a fan-out across the cluster. Classic queues retry the
-*whole job*. Capstan makes the **step** the unit of recovery: once a step's
+*whole job*. Belay makes the **step** the unit of recovery: once a step's
 result commits to the journal, later attempts replay it in microseconds and
 continue from the first unfinished step. The same journal powers spend
 accounting and replay debugging.
@@ -25,78 +25,78 @@ no separate service. Apache-2.0.
 
 ```elixir
 # mix.exs
-{:capstan, "~> 1.0.0-rc.5"}
+{:belay, "~> 1.0.0-rc.5"}
 ```
 
 ```elixir
 # config/config.exs — the Ecto/Phoenix convention, keyed by the instance name
-config :my_app, MyApp.Capstan,
+config :my_app, MyApp.Belay,
   queues: [default: 10, mailers: [limit: 20]],
   crons: [[name: "digest", expr: "0 8 * * 1-5", worker: MyApp.Digest]]
 
 # config/runtime.exs — runtime values (the database URL)
-config :my_app, MyApp.Capstan,
+config :my_app, MyApp.Belay,
   storage: [adapter: :postgres, url: System.fetch_env!("DATABASE_URL")]
 ```
 
 ```elixir
 # application.ex — otp_app pulls the config above; inline opts still override
 children = [
-  {Capstan, otp_app: :my_app, name: MyApp.Capstan},
-  {Capstan.Dashboard, capstan: MyApp.Capstan, port: 4004}
+  {Belay, otp_app: :my_app, name: MyApp.Belay},
+  {Belay.Dashboard, belay: MyApp.Belay, port: 4004}
 ]
 
 # once, at deploy time (idempotent)
-Capstan.Storage.Postgres.migrate!(db_url)
+Belay.Storage.Postgres.migrate!(db_url)
 ```
 
 Prefer everything inline in the supervision tree? That works too — pass the
-same keys to `{Capstan, name: ..., storage: ..., queues: ...}` and skip
+same keys to `{Belay, name: ..., storage: ..., queues: ...}` and skip
 `otp_app`.
 
 ```elixir
 defmodule MyApp.WelcomeEmail do
-  use Capstan.Worker, queue: :mailers, max_attempts: 5
+  use Belay.Worker, queue: :mailers, max_attempts: 5
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     MyApp.Mailer.deliver_welcome(ctx.job.input["user_id"])
   end
 end
 
-Capstan.insert(MyApp.Capstan, MyApp.WelcomeEmail.new(%{"user_id" => 42}))
+Belay.insert(MyApp.Belay, MyApp.WelcomeEmail.new(%{"user_id" => 42}))
 ```
 
 Testing is deterministic — drain synchronously, travel through time:
 
 ```elixir
-{:ok, job} = Capstan.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
-assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
+{:ok, job} = Belay.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
+assert %{succeeded: 1} = Belay.Testing.drain(name, :default)
 
-Capstan.Clock.Sim.advance(clock, 3_600)   # backoff, cron, rate windows, leases…
+Belay.Clock.Sim.advance(clock, 3_600)   # backoff, cron, rate windows, leases…
 ```
 
 ## Steps, waits, fan-out — one worker
 
-Where Capstan pulls ahead of a classic queue is jobs with expensive parts,
+Where Belay pulls ahead of a classic queue is jobs with expensive parts,
 long waits, and moving pieces:
 
 ```elixir
 defmodule MyApp.ResearchPipeline do
-  use Capstan.Worker, queue: :pipelines, max_attempts: 10
+  use Belay.Worker, queue: :pipelines, max_attempts: 10
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     # Committed steps replay from the journal; unfinished steps run again.
-    text    = Capstan.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
-    summary = Capstan.step(ctx, :summarize, fn -> llm!(text) end, cost: [usd: 0.02, tokens: 1200])
+    text    = Belay.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
+    summary = Belay.step(ctx, :summarize, fn -> llm!(text) end, cost: [usd: 0.02, tokens: 1200])
 
     # Fan out real jobs across the cluster; park at zero cost until all land.
-    checks = Capstan.map_children(ctx, :verify, MyApp.FactCheck,
+    checks = Belay.map_children(ctx, :verify, MyApp.FactCheck,
                Enum.map(summary.claims, &%{"claim" => &1}))
 
     # Human in the loop: durable wait, instant wake on signal.
-    case Capstan.await(ctx, :approval, timeout: 86_400) do
+    case Belay.await(ctx, :approval, timeout: 86_400) do
       %{"approved" => true} -> {:ok, %{summary: summary, checks: checks}}
       _ -> {:cancel, :rejected}
     end
@@ -104,7 +104,7 @@ defmodule MyApp.ResearchPipeline do
 end
 
 # Attach a job budget and enforce uniqueness at insert:
-Capstan.insert(MyApp.Capstan,
+Belay.insert(MyApp.Belay,
   MyApp.ResearchPipeline.new(%{"url" => url}, budget: [usd: 1.00], unique: "research:#{url}"))
 ```
 
@@ -123,7 +123,7 @@ a price on it.
 
 LLM-heavy workloads add a failure mode classic queues don't model: cost.
 A retry that re-runs completed API calls buys them twice; a usage spike
-outruns any dashboard. Capstan enforces spend in the engine, in three
+outruns any dashboard. Belay enforces spend in the engine, in three
 layers:
 
 ```elixir
@@ -143,9 +143,9 @@ queues: [
 # 3. True-up — the claim debits the estimate; inside the job you correct it
 #    with actuals, so the window converges on what the invoice will say.
 #    A job debits its own queue's resource:
-Capstan.step(ctx, :summarize, fn ->
+Belay.step(ctx, :summarize, fn ->
   %{text: text, usage: usage} = llm!(prompt)
-  Capstan.debit(ctx, "anthropic_tokens", usage.total_tokens)
+  Belay.debit(ctx, "anthropic_tokens", usage.total_tokens)
   text
 end, cost: [usd: 0.02])
 ```
@@ -153,7 +153,7 @@ end, cost: [usd: 0.02])
 Committed steps replay from the journal at zero declared cost, and budget
 checks read durable spend, so a later attempt cannot forget recorded cost.
 As with any at-least-once system, an external charge made before a crash but
-not journaled may repeat and is not visible to Capstan; use the provider's
+not journaled may repeat and is not visible to Belay; use the provider's
 idempotency mechanism for that window.
 
 ## Why it's built this way
@@ -194,18 +194,18 @@ deep-linkable (`#workflow=<id>`), with the full step journal one click away:
 | Dynamic children | `spawn/3`, `await_children/1`, `map_children/5` — replay-safe runtime DAGs |
 | Workflows & batches | declared DAGs, transactional release, cascade/ignore policies |
 | Event streams | `emit/2` + live subscriptions + offset replay — survives crashes |
-| Replay debugging | `Capstan.Replay.dry_run/2` — re-run code against the recorded journal |
+| Replay debugging | `Belay.Replay.dry_run/2` — re-run code against the recorded journal |
 | Cluster limits | `global_limit`, sliding-window `rate` (request- or **token**-based with true-up), per-tenant `partition` fairness (exact, skew-proof) |
-| Transactional enqueue | `Capstan.Txn.insert/3` in your Postgrex/Ecto transaction; wake-ups deliver exactly on commit |
+| Transactional enqueue | `Belay.Txn.insert/3` in your Postgrex/Ecto transaction; wake-ups deliver exactly on commit |
 | Unique jobs | constraint-backed: while-incomplete, windowed, or forever |
 | Chunk workers | `chunk: [size:, gather_ms:]` — N jobs, one invocation (batch-priced APIs, bulk INSERTs), per-job partial failure |
 | Adaptive concurrency | `limit: [min:, max:]` — per-node scaling under load, exactly bounded by cluster limits |
 | Encrypted inputs | AES-256-GCM at rest; plaintext only in the executing process |
-| Runtime CRUD | `Capstan.Queues` / `Capstan.Crons` — change queues and schedules with no deploy |
+| Runtime CRUD | `Belay.Queues` / `Belay.Crons` — change queues and schedules with no deploy |
 | Scheduling | `schedule_in`, durable `sleep/3`, leaderless cron with exactly-once slots |
 | Embedded dashboard | zero dependencies, one child spec — everything in the GIFs above |
-| MCP server | `mix capstan.mcp` — AI assistants inspect the queue; writes are disabled by default and require an authorizer or explicit opt-in |
-| Oban migration | `mix capstan.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
+| MCP server | `mix belay.mcp` — AI assistants inspect the queue; writes are disabled by default and require an authorizer or explicit opt-in |
+| Oban migration | `mix belay.migrate_oban` — pending jobs move in one command: dry-run analyzer, port verification, idempotent |
 
 ## Measured, not claimed
 
@@ -248,8 +248,8 @@ are engine config (Pruner → `retention:`, Lifeline → renewed leases, Cron
 → `crons:`), and pending jobs move in one command:
 
 ```bash
-mix capstan.migrate_oban --url postgres://.../my_app            # dry-run report
-mix capstan.migrate_oban --url postgres://.../my_app --execute
+mix belay.migrate_oban --url postgres://.../my_app            # dry-run report
+mix belay.migrate_oban --url postgres://.../my_app --execute
 ```
 
 The [migration guide](guides/migrating-from-oban.md) has the full porting

@@ -1,46 +1,46 @@
-defmodule Capstan.Test.Case do
+defmodule Belay.Test.Case do
   @moduledoc false
 
   use ExUnit.CaseTemplate
 
   using do
     quote do
-      import Capstan.Test.Case
+      import Belay.Test.Case
 
-      alias Capstan.Clock.Sim
-      alias Capstan.Test.Events
-      alias Capstan.Testing
+      alias Belay.Clock.Sim
+      alias Belay.Test.Events
+      alias Belay.Testing
     end
   end
 
   setup do
-    Capstan.Test.Events.clear()
+    Belay.Test.Events.clear()
 
     :ok
   end
 
   @doc """
-  Start an isolated Capstan instance. Returns `%{name:, clock:}` where clock
+  Start an isolated Belay instance. Returns `%{name:, clock:}` where clock
   is a SimClock pid (unless `sim_clock: false`).
 
   Queues default to a single manual `:default` queue so tests drive execution
-  via `Capstan.Testing.drain/2`; pass explicit `queues:` for live producers.
+  via `Belay.Testing.drain/2`; pass explicit `queues:` for live producers.
   """
-  def start_capstan!(opts \\ []) do
-    name = Module.concat(CapstanTest, "T#{System.unique_integer([:positive])}")
+  def start_belay!(opts \\ []) do
+    name = Module.concat(BelayTest, "T#{System.unique_integer([:positive])}")
 
     {clock, clock_pid} =
       if Keyword.get(opts, :sim_clock, true) do
-        {:ok, pid} = Capstan.Clock.Sim.start_link(~U[2026-01-05 00:00:00.000000Z])
-        {{Capstan.Clock.Sim, pid}, pid}
+        {:ok, pid} = Belay.Clock.Sim.start_link(~U[2026-01-05 00:00:00.000000Z])
+        {{Belay.Clock.Sim, pid}, pid}
       else
-        {Capstan.Clock.System, nil}
+        {Belay.Clock.System, nil}
       end
 
     storage =
-      case Application.get_env(:capstan, :test_storage, :memory) do
+      case Application.get_env(:belay, :test_storage, :memory) do
         :memory -> [adapter: :memory]
-        :postgres -> [adapter: :postgres, url: Application.fetch_env!(:capstan, :test_pg_url)]
+        :postgres -> [adapter: :postgres, url: Application.fetch_env!(:belay, :test_pg_url)]
       end
 
     defaults = [
@@ -55,34 +55,34 @@ defmodule Capstan.Test.Case do
 
     # Everything else passes straight through, so tests can exercise any
     # instance option without touching this helper.
-    capstan_opts = Keyword.merge(defaults, Keyword.drop(opts, [:sim_clock]))
+    belay_opts = Keyword.merge(defaults, Keyword.drop(opts, [:sim_clock]))
 
-    ExUnit.Callbacks.start_supervised!({Capstan, capstan_opts})
+    ExUnit.Callbacks.start_supervised!({Belay, belay_opts})
 
     if storage[:adapter] == :postgres do
-      Capstan.Storage.Postgres.truncate!(storage_ref(name))
+      Belay.Storage.Postgres.truncate!(storage_ref(name))
     end
 
     %{name: name, clock: clock_pid}
   end
 
   def storage_ref(name) do
-    %{storage_ref: {_mod, ref}} = Capstan.Config.fetch!(name)
+    %{storage_ref: {_mod, ref}} = Belay.Config.fetch!(name)
     ref
   end
 
   def storage(name) do
-    %{storage_ref: storage_ref} = Capstan.Config.fetch!(name)
+    %{storage_ref: storage_ref} = Belay.Config.fetch!(name)
     storage_ref
   end
 
-  def config(name), do: Capstan.Config.fetch!(name)
+  def config(name), do: Belay.Config.fetch!(name)
 
   def advance(nil, _seconds), do: raise("test instance started with sim_clock: false")
-  def advance(clock, seconds), do: Capstan.Clock.Sim.advance(clock, seconds)
+  def advance(clock, seconds), do: Belay.Clock.Sim.advance(clock, seconds)
 
   def job!(name, id) do
-    {:ok, job} = Capstan.get_job(name, id)
+    {:ok, job} = Belay.get_job(name, id)
     job
   end
 

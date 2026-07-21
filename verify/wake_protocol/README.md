@@ -7,7 +7,7 @@ chaos.
 
 Two tests share one model (a serialized "database" process with explicit
 READ COMMITTED transaction visibility; signal delivery and parking
-serialized in-process, playing the role of the `capstan_sig` advisory
+serialized in-process, playing the role of the `belay_sig` advisory
 lock):
 
 - **`count_gated`** — the rc.1 protocol (signal only when your ack's
@@ -37,5 +37,5 @@ mix lockstep.replay traces/<file>.lockstep
 ```
 
 This is a standalone project on purpose: it models the protocol
-abstractly and never imports Capstan code, so Capstan's dependency tree
+abstractly and never imports Belay code, so Belay's dependency tree
 stays untouched.

@@ -2,15 +2,15 @@
 
 A plain background job retries *from the top*. That was fine when jobs were
 "send an email"; it's ruinous when attempt one spent ninety seconds and $0.40
-of LLM tokens before a network blip. Capstan's core primitive fixes the unit
+of LLM tokens before a network blip. Belay's core primitive fixes the unit
 of retry:
 
 ```elixir
 def run(ctx) do
-  text    = Capstan.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
-  summary = Capstan.step(ctx, :summarize, fn -> llm!(text) end, cost: [usd: 0.02, tokens: 1200])
+  text    = Belay.step(ctx, :transcribe, fn -> whisper!(ctx.job.input["url"]) end)
+  summary = Belay.step(ctx, :summarize, fn -> llm!(text) end, cost: [usd: 0.02, tokens: 1200])
 
-  Capstan.step(ctx, :store, fn -> MyApp.Store.put!(summary) end)
+  Belay.step(ctx, :store, fn -> MyApp.Store.put!(summary) end)
 
   {:ok, summary}
 end
@@ -34,7 +34,7 @@ resumes at `:store`.
   step should be re-run on retry, raise (or let the failing call raise)
   instead of returning an error value.
 - **Step names are the identity.** Loop iterations need distinct names:
-  `Capstan.step(ctx, "iteration-#{n}", ...)`.
+  `Belay.step(ctx, "iteration-#{n}", ...)`.
 - **Values must be term-serializable.** No pids, refs, or functions; there's
   a 1 MB per-value limit to keep the journal honest (store large artifacts
   elsewhere and memoize the reference).
@@ -45,9 +45,9 @@ resumes at `:store`.
 ## Durable sleep
 
 ```elixir
-Capstan.step(ctx, :send_offer, fn -> send_offer!(user) end)
-Capstan.sleep(ctx, :cooling_off, 3 * 86_400)
-Capstan.step(ctx, :follow_up, fn -> follow_up!(user) end)
+Belay.step(ctx, :send_offer, fn -> send_offer!(user) end)
+Belay.sleep(ctx, :cooling_off, 3 * 86_400)
+Belay.step(ctx, :follow_up, fn -> follow_up!(user) end)
 ```
 
 `sleep/3` memoizes its wake time under the given name and parks the job —
@@ -61,7 +61,7 @@ Steps carry declared cost columns (`usd`, `tokens`). Budgets provide a
 fail-after-crossing limit:
 
 ```elixir
-Capstan.insert(MyApp.Capstan,
+Belay.insert(MyApp.Belay,
   MyApp.ResearchAgent.new(%{"topic" => topic}, budget: [usd: 5.00, tokens: 500_000]))
 ```
 
@@ -69,18 +69,18 @@ The engine checks accumulated spend both *before* each unfinished step and
 *after* recording its declared cost. The crossing step runs, commits, and then
 fails the job with `:budget_exceeded`; later unfinished steps are refused. In
 the modeled single-attempt path, overshoot is bounded by one step's declared
-cost. The failed job keeps its journal, so `Capstan.steps/2` shows exactly what
-Capstan recorded.
+cost. The failed job keeps its journal, so `Belay.steps/2` shows exactly what
+Belay recorded.
 
 This is not a payment-provider hard stop. Actual usage can differ from the
 declared estimate, and a provider charge made in the crash-before-journal
-window can repeat. Reconcile actuals with `Capstan.debit/3` and use provider
+window can repeat. Reconcile actuals with `Belay.debit/3` and use provider
 idempotency keys when a true external-spend guarantee matters.
 
 ## The journal is a debugging asset
 
-Because every step's value is recorded, `Capstan.Replay.dry_run/2` can re-run
+Because every step's value is recorded, `Belay.Replay.dry_run/2` can re-run
 a job's *code* against its *journal*: memoized reads return recorded values,
 nothing side-effectful executes, and the first thing the recording never saw
-is reported precisely. See the moduledoc of `Capstan.Replay` — it turns
+is reported precisely. See the moduledoc of `Belay.Replay` — it turns
 "what did production actually do?" from archaeology into a function call.

@@ -1,6 +1,6 @@
 defmodule WakeProtocolTest do
   @moduledoc """
-  Controlled-concurrency exploration of Capstan's parent-wake protocol
+  Controlled-concurrency exploration of Belay's parent-wake protocol
   (SCHEMA.md race R1), using Lockstep to schedule every interleaving that
   matters instead of hoping a chaos soak samples the bad one.
 
@@ -15,7 +15,7 @@ defmodule WakeProtocolTest do
   like Postgres). Transaction visibility is explicit — writes buffer
   per-transaction, reads see committed state plus the reader's own buffer,
   commit merges. Signal delivery and parking serialize inside the database
-  process, which is exactly the role of the `capstan_sig:<scope>` advisory
+  process, which is exactly the role of the `belay_sig:<scope>` advisory
   lock in the real system. The parent re-verifies completeness on every
   wake and parks with the signal count it last saw (no lost-wakeup window).
 

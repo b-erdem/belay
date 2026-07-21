@@ -5,7 +5,7 @@
 #   same_node — queues run in this process; wake-ups are local pokes
 #   remote    — jobs run in a separate OS process (bench/worker.exs);
 #               wake-ups depend on BENCH_NOTIFIERS (local | local,postgres)
-url = System.get_env("BENCH_URL") || "postgres://postgres:capstan@localhost:55433/capstan_bench"
+url = System.get_env("BENCH_URL") || "postgres://postgres:belay@localhost:55433/belay_bench"
 mode = System.get_env("BENCH_MODE", "same_node")
 n = String.to_integer(System.get_env("BENCH_N", "200"))
 label = System.get_env("BENCH_LABEL", mode)
@@ -21,7 +21,7 @@ Code.require_file(Path.join(__DIR__, "bench_workers.exs"))
 queues = if mode == "same_node", do: [default: 16], else: []
 
 {:ok, _} =
-  Capstan.start_link(
+  Belay.start_link(
     name: BenchDriver,
     storage: [adapter: :postgres, url: url],
     queues: queues,
@@ -33,8 +33,8 @@ Process.sleep(500)
 
 measure = fn ->
   t0 = System.monotonic_time(:microsecond)
-  {:ok, job} = Capstan.insert(BenchDriver, Bench.Echo.new(%{"t" => t0}))
-  {:ok, _} = Capstan.await_result(BenchDriver, job.id, 15_000)
+  {:ok, job} = Belay.insert(BenchDriver, Bench.Echo.new(%{"t" => t0}))
+  {:ok, _} = Belay.await_result(BenchDriver, job.id, 15_000)
 
   System.monotonic_time(:microsecond) - t0
 end
@@ -50,10 +50,10 @@ mean = Enum.sum(samples) / n / 1_000
 
 # Burst: 100 inserts at once, one await sweep.
 burst_t0 = System.monotonic_time(:microsecond)
-burst_jobs = Capstan.insert_all(BenchDriver, for(i <- 1..100, do: Bench.Echo.new(%{"i" => i})))
+burst_jobs = Belay.insert_all(BenchDriver, for(i <- 1..100, do: Bench.Echo.new(%{"i" => i})))
 
 for job <- burst_jobs do
-  {:ok, _} = Capstan.await_result(BenchDriver, job.id, 15_000)
+  {:ok, _} = Belay.await_result(BenchDriver, job.id, 15_000)
 end
 
 burst_ms = (System.monotonic_time(:microsecond) - burst_t0) / 1_000

@@ -4,7 +4,7 @@ set -eu
 : "${TLA2TOOLS_JAR:?set TLA2TOOLS_JAR to tla2tools.jar}"
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-WORK=${TMPDIR:-/tmp}/capstan-formal-$$
+WORK=${TMPDIR:-/tmp}/belay-formal-$$
 trap 'rm -rf "$WORK"' EXIT INT TERM
 mkdir -p "$WORK/canonical" "$WORK/mutants/attempt" \
   "$WORK/mutants/budget" "$WORK/mutants/cancel" "$WORK/mutants/retry"

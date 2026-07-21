@@ -1,17 +1,17 @@
 #!/bin/bash
 # Dispatch-latency benchmark across three topologies. Requires the
-# capstan-postgres container (port 55433).
+# belay-postgres container (port 55433).
 set -u
 cd "$(dirname "$0")/.."
 
-export BENCH_URL="${BENCH_URL:-postgres://postgres:capstan@localhost:55433/capstan_bench}"
+export BENCH_URL="${BENCH_URL:-postgres://postgres:belay@localhost:55433/belay_bench}"
 
 mix compile --warnings-as-errors || exit 2
 
 run_remote() {
   local notifiers=$1 label=$2 n=$3
   mix run --no-compile bench/init.exs > /dev/null
-  BENCH_NOTIFIERS="$notifiers" nohup mix run --no-compile bench/worker.exs > /tmp/capstan_bench_worker.log 2>&1 &
+  BENCH_NOTIFIERS="$notifiers" nohup mix run --no-compile bench/worker.exs > /tmp/belay_bench_worker.log 2>&1 &
   local wpid=$!
   sleep 5
   BENCH_MODE=remote BENCH_NOTIFIERS="$notifiers" BENCH_N="$n" BENCH_LABEL="$label" \

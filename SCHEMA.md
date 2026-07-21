@@ -1,18 +1,18 @@
-# The Capstan Wire Contract
+# The Belay Wire Contract
 
 **Contract v1 · schema migration 2 · status: draft-stable (frozen at 1.0.0)**
 
-Capstan's protocol is its Postgres schema. Everything an SDK in any language
+Belay's protocol is its Postgres schema. Everything an SDK in any language
 needs — enqueueing, claiming, acking, steps, signals, children, workflows —
 is specified here as tables plus SQL semantics. The Elixir implementation in
-`lib/capstan/storage/postgres.ex` is the reference; where prose and reference
+`lib/belay/storage/postgres.ex` is the reference; where prose and reference
 disagree, the reference wins and the prose has a bug.
 
 Keywords MUST / SHOULD / MAY are used in the RFC sense.
 
 ## 1. Compatibility rules
 
-- The contract version maps to `capstan_meta.version` (currently 2). SDKs
+- The contract version maps to `belay_meta.version` (currently 2). SDKs
   MUST check it at startup and refuse to run against a higher major schema
   than they know.
 - Within a contract major version, changes are **additive only**: new
@@ -28,7 +28,7 @@ Keywords MUST / SHOULD / MAY are used in the RFC sense.
 
 ## 2. Value encoding (the envelope)
 
-`capstan_steps.value` and `capstan_jobs.result` are `bytea`, in one of two
+`belay_steps.value` and `belay_jobs.result` are `bytea`, in one of two
 encodings discriminated by the first byte:
 
 | First byte | Encoding | Written by |
@@ -38,7 +38,7 @@ encodings discriminated by the first byte:
 
 JSON never begins with byte 131, so the discriminator is exact. All SDKs
 MUST decode both (foreign ETF MAY be surfaced as opaque bytes). Step values
-are limited to 1 MiB (the reference enforces this on `capstan_steps.value`;
+are limited to 1 MiB (the reference enforces this on `belay_steps.value`;
 job results are not size-capped). Reserved step values (`$sleep:*`, `$spawn:*`, §9) are
 SDK-internal: never interpret a foreign SDK's reserved values.
 
@@ -53,7 +53,7 @@ of true time (NTP); leases and windows tolerate small skew.
 
 Authoritative DDL: the `@migrations` list in the reference. Summary:
 
-### capstan_jobs
+### belay_jobs
 
 | Column | Type | Semantics |
 |---|---|---|
@@ -61,7 +61,7 @@ Authoritative DDL: the `@migrations` list in the reference. Summary:
 | `kind` | text | worker name (Elixir module string; foreign SDKs use any stable registry name their runtime resolves) |
 | `queue` | text | queue name |
 | `state` | text | §4 |
-| `input` | jsonb | job input; encrypted inputs are `{"$enc": base64(iv‖tag‖ct)}` (AES-256-GCM, AAD `capstan.input.v1`) |
+| `input` | jsonb | job input; encrypted inputs are `{"$enc": base64(iv‖tag‖ct)}` (AES-256-GCM, AAD `belay.input.v1`) |
 | `meta` | jsonb | free-form; the engine never branches on it |
 | `priority` | int | 0 = highest; claim order key |
 | `attempt` | int | incremented by claim; decremented by snooze/await parks |
@@ -82,31 +82,31 @@ Authoritative DDL: the `@migrations` list in the reference. Summary:
 | `inserted_at`, `started_at`, `finished_at` | timestamptz | lifecycle stamps |
 
 Required indexes (names normative — migrations are shared):
-`capstan_jobs_claim_idx` (queue, priority, ready_at, id) WHERE state='ready';
-`capstan_jobs_await_due_idx`; `capstan_jobs_await_wake_idx` (await_scope,
-await_name) WHERE state='awaiting'; `capstan_jobs_lease_idx` (lease_until)
-WHERE state='running'; `capstan_jobs_workflow_idx`; `capstan_jobs_parent_idx`;
-`capstan_jobs_prune_idx`; unique `capstan_jobs_cron_slot_idx` (cron_name,
+`belay_jobs_claim_idx` (queue, priority, ready_at, id) WHERE state='ready';
+`belay_jobs_await_due_idx`; `belay_jobs_await_wake_idx` (await_scope,
+await_name) WHERE state='awaiting'; `belay_jobs_lease_idx` (lease_until)
+WHERE state='running'; `belay_jobs_workflow_idx`; `belay_jobs_parent_idx`;
+`belay_jobs_prune_idx`; unique `belay_jobs_cron_slot_idx` (cron_name,
 cron_slot) WHERE cron_name IS NOT NULL; unique
-`capstan_jobs_unique_incomplete_idx` (unique_key) WHERE unique_mode =
+`belay_jobs_unique_incomplete_idx` (unique_key) WHERE unique_mode =
 'incomplete' AND state IN (incomplete set); unique
-`capstan_jobs_unique_window_idx` (unique_key) WHERE unique_mode IN
+`belay_jobs_unique_window_idx` (unique_key) WHERE unique_mode IN
 ('window','always').
 
 ### The rest
 
-- `capstan_steps (job_id, seq, name, value, usd_micros, tokens, inserted_at)`
+- `belay_steps (job_id, seq, name, value, usd_micros, tokens, inserted_at)`
   — PK `(job_id, name)`; `seq` = per-job insertion order.
-- `capstan_events (job_id, seq, payload, inserted_at)` — PK `(job_id, seq)`;
+- `belay_events (job_id, seq, payload, inserted_at)` — PK `(job_id, seq)`;
   append-only stream.
-- `capstan_signals (scope, name, payload, inserted_at)` — PK `(scope, name)`;
+- `belay_signals (scope, name, payload, inserted_at)` — PK `(scope, name)`;
   upsert-latest, persistent until cleared or TTL-pruned.
-- `capstan_rate (bucket, window_start, count)` — sliding-window counters;
+- `belay_rate (bucket, window_start, count)` — sliding-window counters;
   bucket = `queue:<q>` or `resource:<name>`.
-- `capstan_queues (name, opts, updated_at)` / `capstan_crons (name,
+- `belay_queues (name, opts, updated_at)` / `belay_crons (name,
   expression, worker, input, opts, paused, updated_at)` — runtime CRUD rows,
   reconciled by every node.
-- `capstan_meta (version)` — migration bookkeeping.
+- `belay_meta (version)` — migration bookkeeping.
 
 ## 4. State machine
 
@@ -133,7 +133,7 @@ States: `ready` `running` `awaiting` `held` `paused` · terminal: `succeeded`
 
 ### 5.1 Insert
 
-Multi-row `INSERT INTO capstan_jobs (…) VALUES (…) ON CONFLICT DO NOTHING
+Multi-row `INSERT INTO belay_jobs (…) VALUES (…) ON CONFLICT DO NOTHING
 RETURNING *`. The targetless conflict clause absorbs both cron-slot and
 unique-key dedup; skipped rows are not returned. New rows MUST set:
 `attempt=0`, `errors='[]'`, `spent_*=0`, `cancel_requested=false`,
@@ -160,7 +160,7 @@ transaction (§9.2) — Postgres delivers it only on commit.
 
 All claim work happens in **one transaction**. When the queue has
 `global_limit`, `rate`, or `partition`, first take
-`pg_advisory_xact_lock(hashtext('capstan:' || queue))` — it serializes
+`pg_advisory_xact_lock(hashtext('belay:' || queue))` — it serializes
 claimers so admission math cannot race.
 
 Admission (computed before selecting candidates):
@@ -225,15 +225,15 @@ Terminal outcomes additionally clear `unique_key` semantics implicitly (the
 partial `incomplete` index stops covering the row — no write needed).
 
 **Await park-and-wake (normative).** Before writing an `await` park, take
-`pg_advisory_xact_lock(hashtext('capstan_sig:' || scope))`, then check
-`SELECT 1 FROM capstan_signals WHERE scope=$s AND name=$n` — if present,
+`pg_advisory_xact_lock(hashtext('belay_sig:' || scope))`, then check
+`SELECT 1 FROM belay_signals WHERE scope=$s AND name=$n` — if present,
 park as `ready` (`ready_at=$now`, await fields NULL) instead. Signal
 delivery (§8.1) takes the same lock; this serialization plus the persistent
 signal row makes lost wake-ups impossible by construction.
 
 **After any terminal write** (ack, reclaim-fail, cancel):
 1. If `workflow_id`: settle (§8.3) under
-   `pg_advisory_xact_lock(hashtext('capstan_wf:' || workflow_id))`.
+   `pg_advisory_xact_lock(hashtext('belay_wf:' || workflow_id))`.
 2. For the job **and each settlement-cancelled job** with a `parent_id`:
    deliver the `$children` signal to `job:<parent_id>` (§8.4) —
    **unconditionally**, never gated on a sibling count (§11, race R1).
@@ -244,8 +244,8 @@ reverse.
 ## 8. Semantics built on the above
 
 ### 8.1 Signals
-Deliver = under the scope lock: upsert `capstan_signals`, then
-`UPDATE capstan_jobs SET state='ready', ready_at=$now, await_scope=NULL,
+Deliver = under the scope lock: upsert `belay_signals`, then
+`UPDATE belay_jobs SET state='ready', ready_at=$now, await_scope=NULL,
 await_name=NULL WHERE state='awaiting' AND await_scope=$s AND await_name=$n
 RETURNING *` (poke the returned queues). Read = `scope = ANY($scopes)`;
 a job's default scopes are `job:<id>` plus `wf:<workflow_id>` when present.
@@ -261,7 +261,7 @@ step and acking the failure lets the next attempt replay past the journal
 and execute one more paid step. Then run the function, then
 `INSERT (job_id, seq=(SELECT COALESCE(MAX(seq),0)+1 …), name, value, costs,
 $now) ON CONFLICT (job_id, name) DO NOTHING`, then
-`UPDATE capstan_jobs SET spent_usd_micros = spent_usd_micros + $u,
+`UPDATE belay_jobs SET spent_usd_micros = spent_usd_micros + $u,
 spent_tokens = spent_tokens + $t WHERE id=$1 RETURNING spent_*` (one
 transaction). If a returned spent exceeds its budget column, the SDK MUST
 fail the job with error `budget_exceeded`. Returned values are memoized —
@@ -274,7 +274,7 @@ matching flag in `wf_ignore` (`"failed"`/`"cancelled"`); it **dooms** when
 any dep is terminal-failed without its flag. Iterate to fixpoint, doomed
 jobs counting as `cancelled` for their own dependents. Apply: releases →
 `ready` (guard `WHERE state='held'`), dooms → `cancelled` + `finished_at`
-(same guard). Reference implementation: settle/1 in lib/capstan/storage.ex.
+(same guard). Reference implementation: settle/1 in lib/belay/storage.ex.
 
 ### 8.4 Dynamic children
 Spawn MUST be doubly idempotent: (a) the spawn is a memoized step named
@@ -290,7 +290,7 @@ all terminal (and exist) → `ready` (§11, R2).
 ### 8.5 Cron
 For each due minute slot (UTC-truncated), insert with `(cron_name,
 cron_slot)`; the unique index makes firing exactly-once cluster-wide with no
-leader. Dynamic `capstan_crons` rows merge over static config by name;
+leader. Dynamic `belay_crons` rows merge over static config by name;
 `paused` rows are skipped.
 
 ### 8.6 Cancel, retry, pause
@@ -314,7 +314,7 @@ operator freezes of parked jobs.
 
 ### 8.7 Retention
 Sweepers delete terminal jobs older than per-state retention **together
-with** their `capstan_steps` and `capstan_events` rows (batched, e.g.
+with** their `belay_steps` and `belay_events` rows (batched, e.g.
 LIMIT 500), prune signals past TTL and rate windows older than a day.
 Non-terminal jobs are never pruned.
 
@@ -324,7 +324,7 @@ Polling is the correctness floor; every wake mechanism is lossy-by-assumption.
 
 - **9.1 Polling**: SDKs SHOULD poll adaptively — a hot cadence while claims
   return work (reference: 25ms), decaying to an idle ceiling (500ms).
-- **9.2 pg_notify** (optional): channel `capstan_<database-name sanitized to
+- **9.2 pg_notify** (optional): channel `belay_<database-name sanitized to
   [A-Za-z0-9_]>`. Payloads: poke `{"t":"p","q":"<queue>"}`, result
   `{"t":"r","id":<job_id>}`. Emit at most one poke per queue per
   insert-batch/completion (the NOTIFY commit lock punishes chattiness).

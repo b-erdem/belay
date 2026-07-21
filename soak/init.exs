@@ -1,13 +1,13 @@
 # Reset the soak database and create the harness's own tables.
-url = System.get_env("SOAK_URL") || "postgres://postgres:capstan@localhost:55433/capstan_soak"
+url = System.get_env("SOAK_URL") || "postgres://postgres:belay@localhost:55433/belay_soak"
 
-Capstan.Storage.Postgres.ensure_database!(url)
-Capstan.Storage.Postgres.reset!(url)
+Belay.Storage.Postgres.ensure_database!(url)
+Belay.Storage.Postgres.reset!(url)
 
 {:ok, conn} =
   url
-  |> Capstan.Storage.Postgres.parse_url()
-  |> Keyword.merge(pool_size: 1, types: Capstan.Storage.PostgresTypes)
+  |> Belay.Storage.Postgres.parse_url()
+  |> Keyword.merge(pool_size: 1, types: Belay.Storage.PostgresTypes)
   |> Postgrex.start_link()
 
 Postgrex.query!(conn, "DROP TABLE IF EXISTS soak_effects, soak_ledger", [])

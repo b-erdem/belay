@@ -54,13 +54,13 @@ defmodule V do
 
   def boot(scenario_index) do
     name = Module.concat(VerifyTrace, "S#{scenario_index}")
-    {:ok, clock} = Capstan.Clock.Sim.start_link(@epoch)
+    {:ok, clock} = Belay.Clock.Sim.start_link(@epoch)
 
     {:ok, sup} =
-      Capstan.start_link(
+      Belay.start_link(
         name: name,
         storage: [adapter: :memory],
-        clock: {Capstan.Clock.Sim, clock},
+        clock: {Belay.Clock.Sim, clock},
         queues: [default: [limit: 10, manual: true]],
         poll_interval: 100,
         sweep_interval: 200,
@@ -72,37 +72,37 @@ defmodule V do
 
   def stop(%{sup: sup}), do: Supervisor.stop(sup)
 
-  def now(name), do: Capstan.Config.fetch!(name) |> Capstan.Config.now()
+  def now(name), do: Belay.Config.fetch!(name) |> Belay.Config.now()
 
-  def storage(name), do: Capstan.Config.fetch!(name).storage_ref
+  def storage(name), do: Belay.Config.fetch!(name).storage_ref
 
   def advance(%{name: name, clock: clock}, seconds) do
-    Capstan.Clock.Sim.advance(clock, seconds)
+    Belay.Clock.Sim.advance(clock, seconds)
     emit(%{event: "action", kind: "advance", seconds: seconds, t: unix(now(name))})
   end
 
   def drain(%{name: name}) do
     emit(%{event: "action", kind: "drain"})
-    Capstan.Testing.drain(name, :default)
+    Belay.Testing.drain(name, :default)
   end
 
   def insert(%{name: name}, buildable, fields \\ %{}) do
-    {:ok, job} = Capstan.insert(name, buildable)
+    {:ok, job} = Belay.insert(name, buildable)
     emit(Map.merge(%{event: "action", kind: "insert", job: job.id}, fields))
     job
   end
 
   # Immediate for parked states, cooperative (:requested) for running.
   def cancel(%{name: name}, id) do
-    {:ok, status} = Capstan.cancel(name, id)
+    {:ok, status} = Belay.cancel(name, id)
     emit(%{event: "action", kind: "cancel", job: id, status: status})
   end
 
   # A real claim through the storage API — used when a scenario needs an
   # attempt that will "die" (lease left to expire) rather than run to ack.
   def claim(%{name: name}, lease_ms) do
-    config = Capstan.Config.fetch!(name)
-    spec = Capstan.Queues.resolve_spec!(config, :default)
+    config = Belay.Config.fetch!(name)
+    spec = Belay.Queues.resolve_spec!(config, :default)
     {mod, ref} = storage(name)
 
     {:ok, [job]} = mod.claim(ref, spec, 1, "verify-node", lease_ms, now(name))
@@ -116,7 +116,7 @@ defmodule V do
     {mod, ref} = storage(name)
 
     {:ok, _spent} =
-      mod.put_step(ref, id, step, Capstan.Codec.encode(1), %{usd_micros: usd_micros, tokens: 0}, now(name))
+      mod.put_step(ref, id, step, Belay.Codec.encode(1), %{usd_micros: usd_micros, tokens: 0}, now(name))
 
     emit(%{event: "exec", job: id, step: step})
   end
@@ -134,7 +134,7 @@ defmodule V do
   def snapshot(%{name: name}, id) do
     {mod, ref} = storage(name)
     {:ok, job} = mod.get_job(ref, id)
-    {:ok, steps} = Capstan.steps(name, id)
+    {:ok, steps} = Belay.steps(name, id)
 
     emit(%{
       event: "state",
@@ -154,38 +154,38 @@ end
 # -- Workers --------------------------------------------------------------------
 
 defmodule V.TwoStep do
-  use Capstan.Worker, queue: :default
+  use Belay.Worker, queue: :default
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
-    Capstan.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
-    Capstan.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
+    Belay.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
+    Belay.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
     {:ok, %{"done" => true}}
   end
 end
 
 defmodule V.FlakyBetweenSteps do
-  use Capstan.Worker, queue: :default, max_attempts: 3
+  use Belay.Worker, queue: :default, max_attempts: 3
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
-    Capstan.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
+    Belay.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
     if ctx.job.attempt == 1, do: raise("crash between steps")
-    Capstan.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
+    Belay.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
     :ok
   end
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def backoff(_attempt), do: 5
 end
 
 defmodule V.FiveStepBudget do
-  use Capstan.Worker, queue: :default, max_attempts: 3
+  use Belay.Worker, queue: :default, max_attempts: 3
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     for i <- 1..5 do
-      Capstan.step(ctx, "b#{i}", fn -> V.exec(ctx, "b#{i}") && i end, cost: [usd: 0.2])
+      Belay.step(ctx, "b#{i}", fn -> V.exec(ctx, "b#{i}") && i end, cost: [usd: 0.2])
     end
 
     :ok
@@ -193,37 +193,37 @@ defmodule V.FiveStepBudget do
 end
 
 defmodule V.SelfCancel do
-  use Capstan.Worker, queue: :default
+  use Belay.Worker, queue: :default
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
     instance = String.to_existing_atom(ctx.job.input["instance"])
 
-    Capstan.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
+    Belay.step(ctx, "s1", fn -> V.exec(ctx, "s1") && 1 end)
 
     # An external cancel arriving while the job is mid-run: cooperative,
     # honored at the next step boundary.
-    {:ok, :requested} = Capstan.cancel(instance, ctx.job.id)
+    {:ok, :requested} = Belay.cancel(instance, ctx.job.id)
     V.emit(%{event: "action", kind: "cancel", job: ctx.job.id, status: :requested})
 
-    Capstan.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
+    Belay.step(ctx, "s2", fn -> V.exec(ctx, "s2") && 2 end)
     :ok
   end
 end
 
 defmodule V.AlwaysFails do
-  use Capstan.Worker, queue: :default, max_attempts: 1
+  use Belay.Worker, queue: :default, max_attempts: 1
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(_ctx), do: raise("permanent failure")
 end
 
 defmodule V.Trivial do
-  use Capstan.Worker, queue: :default
+  use Belay.Worker, queue: :default
 
-  @impl Capstan.Worker
+  @impl Belay.Worker
   def run(ctx) do
-    Capstan.step(ctx, "t1", fn -> V.exec(ctx, "t1") && 1 end)
+    Belay.step(ctx, "t1", fn -> V.exec(ctx, "t1") && 1 end)
     :ok
   end
 end
@@ -323,10 +323,10 @@ env = V.boot(7)
 V.start_trace("workflow_settle")
 
 {:ok, jobs} =
-  Capstan.Workflow.new()
-  |> Capstan.Workflow.add(:a, V.AlwaysFails.new(%{}))
-  |> Capstan.Workflow.add(:b, V.Trivial.new(%{}), deps: [:a])
-  |> Capstan.Workflow.insert(env.name)
+  Belay.Workflow.new()
+  |> Belay.Workflow.add(:a, V.AlwaysFails.new(%{}))
+  |> Belay.Workflow.add(:b, V.Trivial.new(%{}), deps: [:a])
+  |> Belay.Workflow.insert(env.name)
 
 V.emit(%{event: "action", kind: "insert", job: jobs["a"].id, wf: "a"})
 V.emit(%{event: "action", kind: "insert", job: jobs["b"].id, wf: "b", deps: ["a"]})

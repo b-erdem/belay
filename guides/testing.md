@@ -1,26 +1,26 @@
 # Testing
 
-Capstan is built to make job tests deterministic: a storage adapter with no
+Belay is built to make job tests deterministic: a storage adapter with no
 I/O, a synchronous drain, and a clock you advance by hand. If a test sleeps,
 something is wrong.
 
 ## Setup
 
 ```elixir
-# test/support/capstan_case.ex
-defmodule MyApp.CapstanCase do
+# test/support/belay_case.ex
+defmodule MyApp.BelayCase do
   use ExUnit.CaseTemplate
 
   setup do
-    {:ok, clock} = Capstan.Clock.Sim.start_link()
+    {:ok, clock} = Belay.Clock.Sim.start_link()
 
     name = Module.concat(MyTest, "C#{System.unique_integer([:positive])}")
 
     start_supervised!(
-      {Capstan,
+      {Belay,
        name: name,
        storage: [adapter: :memory],
-       clock: {Capstan.Clock.Sim, clock},
+       clock: {Belay.Clock.Sim, clock},
        queues: [default: [limit: 10, manual: true]]}
     )
 
@@ -32,7 +32,7 @@ end
 Two choices doing the work:
 
 - **`adapter: :memory`** — a deterministic in-memory storage with identical
-  semantics to Postgres (the same suite tests both in Capstan's own CI).
+  semantics to Postgres (the same suite tests both in Belay's own CI).
 - **`manual: true`** — no live producer claims from the queue, so execution
   happens exactly when your test says so.
 
@@ -40,10 +40,10 @@ Two choices doing the work:
 
 ```elixir
 test "the pipeline completes", %{name: name} do
-  {:ok, job} = Capstan.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
+  {:ok, job} = Belay.insert(name, MyApp.Pipeline.new(%{"id" => 1}))
 
-  assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
-  assert {:ok, result} = Capstan.await_result(name, job.id, 100)
+  assert %{succeeded: 1} = Belay.Testing.drain(name, :default)
+  assert {:ok, result} = Belay.await_result(name, job.id, 100)
 end
 ```
 
@@ -57,14 +57,14 @@ Non-terminal transitions show up too: a job that parked reports as
 
 ```elixir
 test "retries back off", %{name: name, clock: clock} do
-  {:ok, _} = Capstan.insert(name, MyApp.Flaky.new(%{}))
+  {:ok, _} = Belay.insert(name, MyApp.Flaky.new(%{}))
 
-  assert %{ready: 1} = Capstan.Testing.drain(name, :default)   # attempt 1 failed
-  assert %{} == Capstan.Testing.drain(name, :default)          # backoff not due
+  assert %{ready: 1} = Belay.Testing.drain(name, :default)   # attempt 1 failed
+  assert %{} == Belay.Testing.drain(name, :default)          # backoff not due
 
-  Capstan.Clock.Sim.advance(clock, 30)
+  Belay.Clock.Sim.advance(clock, 30)
 
-  assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
+  assert %{succeeded: 1} = Belay.Testing.drain(name, :default)
 end
 ```
 
@@ -75,13 +75,13 @@ injected clock, so all of it is testable by advancing time.
 ## Testing waits and signals
 
 ```elixir
-{:ok, job} = Capstan.insert(name, MyApp.NeedsApproval.new(%{}))
+{:ok, job} = Belay.insert(name, MyApp.NeedsApproval.new(%{}))
 
-assert %{awaiting: 1} = Capstan.Testing.drain(name, :default)
+assert %{awaiting: 1} = Belay.Testing.drain(name, :default)
 
-Capstan.signal_job(name, job.id, :approval, %{"approved" => true})
+Belay.signal_job(name, job.id, :approval, %{"approved" => true})
 
-assert %{succeeded: 1} = Capstan.Testing.drain(name, :default)
+assert %{succeeded: 1} = Belay.Testing.drain(name, :default)
 ```
 
 ## Unit-testing a worker without the engine
@@ -91,15 +91,15 @@ factor the logic out and keep `run/1` as orchestration, testing the
 orchestration through drain as above. The drain path exercises the real
 claim/ack machinery, which is where the bugs live.
 
-## How Capstan itself is tested
+## How Belay itself is tested
 
 If you're contributing (or judging whether to trust this thing in
 production), here is the taxonomy of the suite and what each layer is for:
 
 | Layer | Where | What it catches |
 |---|---|---|
-| Unit | `test/capstan/{logic,cron_expr,input_schema,config,codec}_test.exs` | Pure-function bugs: rate math, cron matching, schema validation, config validation, value encoding |
-| Integration | most of `test/capstan/*_test.exs` | Feature behavior through the real claim/ack machinery, run against **both** storage adapters |
+| Unit | `test/belay/{logic,cron_expr,input_schema,config,codec}_test.exs` | Pure-function bugs: rate math, cron matching, schema validation, config validation, value encoding |
+| Integration | most of `test/belay/*_test.exs` | Feature behavior through the real claim/ack machinery, run against **both** storage adapters |
 | Property | seeded loops in `logic_test.exs`, `adapter_equivalence_test.exs` | Invariants across generated inputs (allowances bounded and monotone; adapters behaviorally identical) |
 | Adapter equivalence | `adapter_equivalence_test.exs` | Random command sequences applied to Memory and Postgres in lockstep, full-state dumps compared after every step. Found a real bug on its first run (a pending cancel request was silently dropped by the Postgres ack path) |
 | Chaos soak | `soak/` (not in `mix test`) | Crash-consistency: worker `kill -9`, DB restarts, then 13 invariants verified by reading the database — no lost jobs, no double effects, no stuck states |
@@ -110,7 +110,7 @@ production), here is the taxonomy of the suite and what each layer is for:
 Two rules keep the suite honest:
 
 - **Every feature test runs on both adapters.** `mix test` uses Memory;
-  `CAPSTAN_PG=1 mix test` reruns the same files on Postgres. A test that
+  `BELAY_PG=1 mix test` reruns the same files on Postgres. A test that
   only passes on one adapter is a bug somewhere — in the adapter or in
   the test.
 - **No sleeps for correctness.** Anything time-dependent goes through the

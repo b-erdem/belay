@@ -1,6 +1,6 @@
 # Security Policy
 
-Capstan executes your code against your database; the engine itself holds no
+Belay executes your code against your database; the engine itself holds no
 credentials beyond the storage URL you give it, and the dashboard/MCP
 surfaces are operator tools intended for trusted networks. Both are read-only
 by default when no authority is configured: dashboard writes require `token:`
@@ -20,8 +20,8 @@ patch releases with credit unless you prefer otherwise.
 - SQL construction: all values are bind parameters; the only interpolations
   are compile-time field/index names. Reports proving otherwise are very
   welcome.
-- Encrypted inputs are AES-256-GCM envelopes (`Capstan.Job`); keys come from
-  your MFA config and are never persisted or logged by Capstan.
+- Encrypted inputs are AES-256-GCM envelopes (`Belay.Job`); keys come from
+  your MFA config and are never persisted or logged by Belay.
 - The dashboard's HTTP server is intentionally minimal (no TLS); deployment
   guidance lives in the operations guide. Mutations require JSON, reject a
   mismatched browser `Origin`, cap request bodies at 1 MiB, and reject
