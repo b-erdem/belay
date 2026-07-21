@@ -9,7 +9,7 @@ no Ecto, no Redis, no separate orchestrator service.
 ```elixir
 # mix.exs
 def deps do
-  [{:capstan, "~> 1.0.0-rc.1"}]
+  [{:capstan, "~> 1.0.0-rc.4"}]
 end
 ```
 
@@ -111,6 +111,7 @@ exactly once cluster-wide.
 ## Where to next
 
 - [Durable steps](durable-steps.md) — the primitive that makes retries cheap
+- [Migrating from Oban](migrating-from-oban.md) — porting map + one-command job migration
 - [Building agents](agents.md) — budgets, human approval, fan-out, streaming
 - [Operations](operations.md) — leases, shutdown, retention, observability
 - [Testing](testing.md) — deterministic tests with `drain` and a SimClock

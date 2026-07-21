@@ -53,9 +53,9 @@ event loop), single-language, and none of Temporal's decade of hardening.
 
 Different language ecosystems (Ruby/Go), same generation: job-granular
 retries and paid tiers for composition features. Capstan's design brief was
-explicitly the next generation — if you're in Elixir and your workload looks
-like 2026 (agents, LLM calls, human gates, spend caps), that's the gap it
-fills.
+explicitly the next generation — if you're in Elixir and your workload
+includes LLM calls, agent pipelines, human gates, or spend caps, that's the
+gap it fills.
 
 Chunked execution (Pro's chunk workers) and load-adaptive concurrency are
 covered natively: `chunk: [size: n, gather_ms: t]` with per-job partial
