@@ -10,6 +10,12 @@
   Validated by mutation: reverting either known production bug in the model
   (the budget crash window; the cancel-request clear) yields a TLC
   counterexample matching the real-world failure step for step.
+- **Schedule-explored wake protocol (`verify/wake_protocol/`).** The
+  parent-wake protocol under Lockstep controlled concurrency: the pre-fix
+  count-gated protocol loses the wake on a found, saved, replayable
+  schedule (PCT iteration 1); the shipped unconditional protocol survives
+  every explored interleaving without the sweeper reconciler — evidence
+  the reconciler is a backstop, not load-bearing.
 - **`SCHEMA.md` — the wire contract.** The Postgres schema specified as a
   versioned protocol: tables, state machine, annotated SQL for every
   operation, advisory-lock discipline, the two soak-learned race rules, and
