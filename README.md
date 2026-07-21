@@ -261,9 +261,8 @@ by the same soak harness, sharing one database with Elixir workers.
 
 **1.0.0-rc.** Feature-complete; endurance-soaked, model-checked, and
 carrying its first real application — new, honestly: production miles are
-the one feature that can't be rushed. The remaining path to 1.0 final is
-public in [docs/ZERO_TO_ONE.md](docs/ZERO_TO_ONE.md). Post-1.0: SQLite
-storage, batched acking, Python/TypeScript SDKs.
+the one feature that can't be rushed. Post-1.0: SQLite storage, batched
+acking, Python/TypeScript SDKs.
 
 ## License
 
