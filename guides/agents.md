@@ -58,6 +58,62 @@ mutations). Signals are durable:
 delivered before the job asks, they're found immediately; races cost latency,
 never correctness.
 
+## Gate the irreversible step, cap the run
+
+Two failure modes hit tool-using agents in production. One is an agent that
+takes an irreversible action, sends the email, executes the migration, places
+the order, without a person seeing it first. The other is an agent that loops
+and keeps calling a paid API until someone notices the bill. Belay handles
+both with the primitives above, in one worker, because the job is where the
+wait and the spend both live.
+
+```elixir
+defmodule MyApp.OutreachAgent do
+  use Belay.Worker, queue: :ai, max_attempts: 5
+
+  @impl Belay.Worker
+  def run(ctx) do
+    # Paid research steps. Each commits to the journal, so a retry, or a
+    # resume after approval, does not run them (or pay for them) again.
+    contacts =
+      Belay.step(ctx, :research, fn -> find_contacts!(ctx.job.input) end,
+        cost: [usd: 0.30, tokens: 18_000])
+
+    drafts =
+      Belay.step(ctx, :draft, fn -> draft_messages!(contacts) end,
+        cost: [usd: 0.10, tokens: 6_000])
+
+    # The irreversible action waits for a person. The job parks at zero cost
+    # until your review UI (or the MCP `signal` tool) delivers the decision.
+    case Belay.await(ctx, :approval, timeout: 3 * 86_400) do
+      %{"approved" => true} ->
+        Belay.step(ctx, :send, fn -> send_all!(drafts) end)
+        {:ok, %{"sent" => length(drafts)}}
+
+      _ ->
+        {:cancel, :not_approved}
+    end
+  end
+end
+
+# The whole run is bounded. Checked before each step against durable spend,
+# so a loop or a retry cannot walk past the cap.
+Belay.insert(MyApp.Belay,
+  MyApp.OutreachAgent.new(%{"segment" => "trial-expired"}, budget: [usd: 2.00]))
+```
+
+Two properties are worth naming, because they are where general-purpose LLM
+gateways and agent frameworks stop short:
+
+- **The budget is per run, not per API key.** A gateway quota caps a whole
+  key or team; it cannot say "this one outreach job may spend two dollars."
+  Belay owns that axis because the budget rides on the job.
+- **The cap is enforced, not just observed.** The check reads durable spend
+  before each step, so the run stops before the next paid call instead of
+  surfacing on a dashboard after the invoice. And because the work after
+  approval resumes from committed steps, the research and drafting you
+  already paid for are not repeated when the human approves an hour later.
+
 ## Fan-out / fan-in (map-reduce inside one job)
 
 ```elixir
