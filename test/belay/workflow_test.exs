@@ -90,7 +90,7 @@ defmodule Belay.WorkflowTest do
       |> Workflow.add(:c, tagged("c"), deps: [:b])
       |> Workflow.insert(name)
 
-    {:ok, :cancelled} = Belay.cancel(name, jobs["a"].id)
+    {:ok, :cancelled} = Belay.cancel_job(name, jobs["a"].id)
 
     states =
       name

@@ -13,7 +13,7 @@ defmodule Belay.RetrySemanticsTest.CancelSelfOnce do
 
     if job.attempt == 1 do
       instance = String.to_existing_atom(job.input["instance"])
-      {:ok, :requested} = Belay.cancel(instance, job.id)
+      {:ok, :requested} = Belay.cancel_job(instance, job.id)
     end
 
     Belay.step(ctx, "s2", fn -> 2 end)
@@ -48,7 +48,7 @@ defmodule Belay.RetrySemanticsTest do
     spec = Belay.Queues.resolve_spec!(config, :default)
     {:ok, [_]} = mod.claim(ref, spec, 1, "test-node", 1_000, Belay.Config.now(config))
 
-    assert {:ok, :requested} = Belay.cancel(name, job.id)
+    assert {:ok, :requested} = Belay.cancel_job(name, job.id)
 
     advance(clock, 2)
     now = Belay.Config.now(config)

@@ -88,7 +88,7 @@ defmodule Belay.CoreTest do
   test "cancelling a parked job is immediate", %{name: name} do
     {:ok, job} = Belay.insert(name, Echo.new(%{}, schedule_in: 300))
 
-    assert {:ok, :cancelled} = Belay.cancel(name, job.id)
+    assert {:ok, :cancelled} = Belay.cancel_job(name, job.id)
     assert job!(name, job.id).state == "cancelled"
     assert Testing.drain(name, :default) == %{}
   end
@@ -102,7 +102,7 @@ defmodule Belay.CoreTest do
 
     {:ok, [claimed]} = mod.claim(ref, spec, 1, "test-node", 30_000, now)
 
-    assert {:ok, :requested} = Belay.cancel(name, job.id)
+    assert {:ok, :requested} = Belay.cancel_job(name, job.id)
 
     {:ok, acked, _released} = Belay.Runner.execute(config(name), claimed)
 

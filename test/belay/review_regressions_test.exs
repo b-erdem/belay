@@ -35,7 +35,7 @@ defmodule Belay.ReviewRegressionsTest do
       start_belay!(queues: [part: [limit: 5, partition: {:input, "tenant"}, manual: true]])
 
     {:ok, job} = Belay.insert(name, Belay.Test.Echo.new(%{"tenant" => "t1"}, queue: :part))
-    assert {:ok, :cancelled} = Belay.cancel(name, job.id)
+    assert {:ok, :cancelled} = Belay.cancel_job(name, job.id)
 
     {mod, ref} = storage(name)
     config = Belay.Config.fetch!(name)

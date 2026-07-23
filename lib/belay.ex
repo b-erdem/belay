@@ -49,7 +49,7 @@ defmodule Belay do
   work. Step bodies remain at-least-once until the journal write commits.
   Budgets fail the job with `:budget_exceeded` after a step's declared cost
   crosses the limit. Signals
-  (`Belay.signal_job/4`) wake awaiting jobs instantly; `steer/3` injects
+  (`Belay.signal_job/4`) wake awaiting jobs instantly; `steer_job/3` injects
   guidance readable via `steering/1` at step boundaries.
 
   ## Instance options
@@ -227,8 +227,8 @@ defmodule Belay do
   end
 
   @doc "Cancel a job: immediate for parked states, cooperative for running."
-  @spec cancel(instance(), integer()) :: {:ok, :cancelled | :requested | :noop}
-  def cancel(name, id) do
+  @spec cancel_job(instance(), integer()) :: {:ok, :cancelled | :requested | :noop}
+  def cancel_job(name, id) do
     config = Config.fetch!(name)
     {storage, ref} = config.storage_ref
 
@@ -390,8 +390,8 @@ defmodule Belay do
   end
 
   @doc "Inject steering guidance readable by the running job via `steering/1`."
-  @spec steer(instance(), integer(), map()) :: :ok
-  def steer(name, job_id, payload) when is_map(payload) do
+  @spec steer_job(instance(), integer(), map()) :: :ok
+  def steer_job(name, job_id, payload) when is_map(payload) do
     signal_job(name, job_id, "$steer", payload)
   end
 

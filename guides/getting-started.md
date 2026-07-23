@@ -9,7 +9,7 @@ no Ecto, no Redis, no separate orchestrator service.
 ```elixir
 # mix.exs
 def deps do
-  [{:belay, "~> 1.0.0-rc.5"}]
+  [{:belay, "~> 1.0.0-rc.6"}]
 end
 ```
 

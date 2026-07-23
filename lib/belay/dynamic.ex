@@ -50,7 +50,6 @@ defmodule Belay.Queues do
   end
 
   @doc false
-  # Resolve a queue spec: dynamic entries override static config.
   def resolve_spec!(%Config{} = config, queue) do
     queue = to_string(queue)
 

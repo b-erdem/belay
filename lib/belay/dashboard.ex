@@ -421,7 +421,7 @@ defmodule Belay.Dashboard do
 
   defp mutate(state, "cancel", id, params) do
     with :ok <- authorize_mutation(state, "cancel_job", Map.put(params, "id", id)) do
-      {:ok, status} = Belay.cancel(state.belay, id)
+      {:ok, status} = Belay.cancel_job(state.belay, id)
 
       {200, %{"cancel" => to_string(status)}}
     end
@@ -429,7 +429,7 @@ defmodule Belay.Dashboard do
 
   defp mutate(state, "steer", id, params) do
     with :ok <- authorize_mutation(state, "steer_job", Map.put(params, "id", id)) do
-      :ok = Belay.steer(state.belay, id, Map.get(params, "payload", %{}))
+      :ok = Belay.steer_job(state.belay, id, Map.get(params, "payload", %{}))
 
       {200, %{"steered" => id}}
     end

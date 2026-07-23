@@ -98,7 +98,7 @@ defmodule Belay.StepsTest do
   test "steering payloads reach the running job", %{name: name} do
     {:ok, job} = Belay.insert(name, Steered.new(%{}))
 
-    Belay.steer(name, job.id, %{"instruction" => "wrap it up"})
+    Belay.steer_job(name, job.id, %{"instruction" => "wrap it up"})
 
     assert %{succeeded: 1} = Testing.drain(name, :default)
 

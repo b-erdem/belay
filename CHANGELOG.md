@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.6 — 2026-07-23
+
+### Changed
+- **Breaking (API naming).** Two job-control functions gained the `_job`
+  suffix so the family is consistent and matches Oban. `Belay.cancel_job/2`
+  and `Belay.steer_job/3` replace the former `cancel` and `steer`. Update
+  call sites; behaviour is unchanged. This is a deliberate pre-1.0 rename to
+  freeze a consistent surface before the stable release.
+
 ## 1.0.0-rc.5 — 2026-07-21
 
 Launch-prep release: formal verification layer, chunk workers, adaptive

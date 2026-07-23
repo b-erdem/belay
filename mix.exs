@@ -1,7 +1,7 @@
 defmodule Belay.MixProject do
   use Mix.Project
 
-  @version "1.0.0-rc.5"
+  @version "1.0.0-rc.6"
   @source_url "https://github.com/b-erdem/belay"
 
   def project do

@@ -151,7 +151,7 @@ Belay.stats(MyApp.Belay)
 
 Belay.list_jobs(MyApp.Belay, state: :failed, limit: 20)
 Belay.retry_job(MyApp.Belay, job_id)
-Belay.cancel(MyApp.Belay, job_id)      # immediate when parked, cooperative when running
+Belay.cancel_job(MyApp.Belay, job_id)      # immediate when parked, cooperative when running
 Belay.pause_queue(MyApp.Belay, :ai)    # local producer stops claiming
 Belay.steps(MyApp.Belay, job_id)       # the journal, costs included
 Belay.events(MyApp.Belay, job_id)      # the emitted stream

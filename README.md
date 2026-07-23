@@ -25,7 +25,7 @@ no separate service. Apache-2.0.
 
 ```elixir
 # mix.exs
-{:belay, "~> 1.0.0-rc.5"}
+{:belay, "~> 1.0.0-rc.6"}
 ```
 
 ```elixir
@@ -272,7 +272,7 @@ run.
 
 ## Status
 
-**1.0.0-rc.5.** The API is broad and the evidence is unusually deep for a new
+**1.0.0-rc.6.** The API is broad and the evidence is unusually deep for a new
 engine, but it is still a release candidate. Production miles are the one
 feature that cannot be compressed into a test suite; evaluate it against your
 failure modes before replacing a queue that already works. Post-1.0 candidates:

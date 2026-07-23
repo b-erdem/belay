@@ -33,7 +33,7 @@ end
 ```
 
 The loop's committed checkpoints are durable: turns are journaled, progress streams
-out through `emit/2`, an operator can `Belay.steer/3` new instructions that
+out through `emit/2`, an operator can `Belay.steer_job/3` new instructions that
 the next boundary picks up, and a `budget:` on insert fails the run after a
 step crosses the configured limit — with the journal intact for the
 post-mortem. A provider call can still repeat in the crash-before-journal
